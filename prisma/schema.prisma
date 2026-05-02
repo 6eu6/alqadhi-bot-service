@@ -187,6 +187,7 @@ model Order {
   @@index([createdAt])
   @@index([status, createdAt])
   @@index([couponId])
+  @@index([userId, createdAt])
   @@map("orders")
 }
 
@@ -265,6 +266,7 @@ model Payment {
   @@index([createdAt])
   @@index([userId])
   @@index([gateway])
+  @@index([gateway, status])
   @@map("payments")
 }
 
@@ -365,6 +367,7 @@ model Notification {
   @@index([read])
   @@index([dismissed])
   @@index([userId, read, dismissed])
+  @@index([createdAt])
   @@map("notifications")
 }
 
@@ -421,30 +424,6 @@ model ExchangeRate {
 
   @@unique([fromCurrency, toCurrency])
   @@map("exchange_rates")
-}
-
-// ============================================
-// المنصات المدعومة
-// ============================================
-
-model Platform {
-  id        String         @id @default(cuid())
-  name      String         // اسم المنصة
-  slug      String         @unique // رابط مختصر
-  image     String         // صورة/شعار المنصة
-  link      String?        // رابط عند الضغط
-  order     Int            @default(0) // الترتيب
-  status    PlatformStatus @default(ACTIVE)
-  createdAt DateTime       @default(now())
-  updatedAt DateTime       @updatedAt
-
-  @@index([status, order])
-  @@map("platforms")
-}
-
-enum PlatformStatus {
-  ACTIVE
-  INACTIVE
 }
 
 // ============================================
