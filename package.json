@@ -1,0 +1,20 @@
+{
+  "name": "alqadhi-bot-service",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "generate": "prisma generate --schema=./prisma/schema.prisma",
+    "dev": "bun run start.mjs",
+    "start": "bun run start.mjs",
+    "postinstall": "npm run generate"
+  },
+  "dependencies": {
+    "@prisma/client": "6.19.2",
+    "prisma": "6.19.2",
+    "telegraf": "^4.16.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.17"
+  },
+  "type": "module"
+}

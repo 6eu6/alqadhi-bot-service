@@ -1,0 +1,697 @@
+// This is your Prisma schema file,
+// متجر القاضي - AlQadi Store
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("SUPABASE_DATABASE_URL")
+  directUrl = env("SUPABASE_DIRECT_URL")
+}
+
+// ============================================
+// المستخدمون
+// ============================================
+
+model User {
+  id            String     @id @default(cuid())
+  name          String
+  email         String     @unique
+  phone         String?    @unique
+  password      String
+  role          Role       @default(CUSTOMER)
+  country       String?
+  currency      String     @default("USD")
+  balance       Decimal    @default(0) 
+  status        UserStatus @default(ACTIVE)
+  emailVerified DateTime?
+  phoneVerified DateTime?
+  image         String?
+  locale        String     @default("ar")   // تفضيل لغة المستخدم: ar | en
+  notifPrefs    Json?      // { promotions: bool, orderEmails: bool }
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  orders        Order[]
+  favorites     Favorite[]
+  notifications Notification[]
+  payments      Payment[]
+  accounts      Account[]
+  sessions      Session[]
+  couponUsages  CouponUsage[]
+
+  @@index([role])
+  @@index([createdAt])
+  @@map("users")
+}
+
+enum Role {
+  CUSTOMER
+  AGENT
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  PENDING
+}
+
+// ============================================
+// الأقسام
+// ============================================
+
+model Category {
+  id          String          @id @default(cuid())
+  name        Json            // {ar: "...", en: "..."}
+  slug        String          @unique
+  image       String?
+  order       Int             @default(0)
+  status      CategoryStatus  @default(ACTIVE)
+  services    Service[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([status])
+  @@index([order])
+  @@map("categories")
+}
+
+enum CategoryStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// ============================================
+// الخدمات
+// ============================================
+
+model Service {
+  id            String        @id @default(cuid())
+  name          Json          // {ar: "...", en: "..."}
+  slug          String        @unique
+  description   Json?         // {ar: "...", en: "..."}
+  image         String?
+  categoryId    String
+  category      Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  status        ServiceStatus @default(AVAILABLE)
+  executionType ExecutionType @default(MANUAL)
+  apiEndpoint   String?
+  apiKey        String?
+  fields        Json?         // حقول مطلوبة من العميل
+  order         Int           @default(0)
+  featured      Boolean       @default(false)
+  prices        ServicePrice[]
+  orderItems    OrderItem[]
+  favorites     Favorite[]
+  flashSales    FlashSale[]
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([categoryId])
+  @@index([status])
+  @@index([featured])
+  @@index([status, featured])
+  @@index([slug])
+  @@map("services")
+}
+
+enum ServiceStatus {
+  AVAILABLE
+  UNAVAILABLE
+  COMING_SOON
+}
+
+enum ExecutionType {
+  MANUAL
+  AUTOMATIC
+}
+
+// ============================================
+// أسعار الخدمات
+// ============================================
+
+model ServicePrice {
+  id            String     @id @default(cuid())
+  serviceId     String
+  service       Service    @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  name          Json       // {ar: "...", en: "..."}
+  quantity      Int
+  price         Decimal    
+  originalPrice Decimal?   
+  baseCost      Decimal    @default(0) // تكلفة المورد — يستخدم لحماية هامش الربح
+  stock         Int?            // المخزون المتاح (null = غير محدود)
+  orderItems    OrderItem[]
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  @@index([serviceId])
+  @@map("service_prices")
+}
+
+// ============================================
+// الطلبات
+// ============================================
+
+model Order {
+  id            String        @id @default(cuid())
+  orderNumber   String        @unique
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  status        OrderStatus   @default(PENDING)
+  paymentStatus PaymentStatus @default(PENDING)
+  paymentMethod String?
+  paymentMethodId String?
+  localPayment  LocalPayment?
+  subtotal      Decimal       
+  discount      Decimal       @default(0) 
+  total         Decimal       
+  totalUSD      Decimal       
+  currency      String        @default("USD")
+  exchangeRate  Decimal?      
+  agentId       String?
+  couponId      String?
+  notes         String?
+  detectedCountry String?
+  items         OrderItem[]
+  payment       Payment?
+  couponUsage   CouponUsage?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([userId])
+  @@index([status])
+  @@index([paymentStatus])
+  @@index([createdAt])
+  @@index([status, createdAt])
+  @@index([couponId])
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  CANCELLED
+  REJECTED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+// ============================================
+// عناصر الطلب
+// ============================================
+
+model OrderItem {
+  id        String          @id @default(cuid())
+  orderId   String
+  order     Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service         @relation(fields: [serviceId], references: [id])
+  priceId   String
+  price     ServicePrice    @relation(fields: [priceId], references: [id])
+  quantity  Int             @default(1)
+  unitPrice Decimal         // سعر البيع اللحظي ($)
+  baseCost  Decimal         @default(0) // تكلفة المورد اللحظية ($) — لتتبع الربح الفعلي
+  inputData Json?           // بيانات العميل
+  status    OrderItemStatus @default(PENDING)
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([orderId])
+  @@index([serviceId])
+  @@index([priceId])
+  @@index([status])
+  @@map("order_items")
+}
+
+enum OrderItemStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  CANCELLED
+}
+
+// ============================================
+// المدفوعات
+// ============================================
+
+model Payment {
+  id            String        @id @default(cuid())
+  orderId       String        @unique
+  order         Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  userId        String
+  user          User          @relation(fields: [userId], references: [id])
+  amount        Decimal       // المبلغ بعملة الدفع
+  currency      String        // عملة الدفع
+  method        String        // STRIPE, MOYASAR, PAYTABS, PAYPAL, MANUAL
+  gateway       String?       // stripe, moyasar, paytabs, paypal — البوابة المستخدمة
+  transactionId String?       @unique
+  gatewayFee    Decimal?      @default(0) // رسوم البوابة
+  netAmount     Decimal?      // المبلغ الصافي بعد الرسوم
+  status        PaymentStatus @default(PENDING)
+  metadata      Json?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([userId])
+  @@index([gateway])
+  @@map("payments")
+}
+
+// ============================================
+// الكوبونات
+// ============================================
+
+model Coupon {
+  id                String       @id @default(cuid())
+  code              String       @unique
+  type              CouponType
+  value             Decimal      
+  minOrder          Decimal?     
+  maxUses           Int?
+  usedCount         Int          @default(0)
+  maxDiscount       Decimal?     // الحد الأقصى للخصم المطلق (مثلاً لا يتجاوز 50$)
+  perUserMaxUses    Int?         // حد الاستخدام لكل مستخدم (null = غير محدود)
+  allowedCategoryIds Json?        // ["catId1","catId2"] أو null = كل الأقسام
+  description       Json?        // {ar: "...", en: "..."} وصف الكوبون لصفحة مركز الكوبونات
+  autoApply         Boolean      @default(false) // يُطبق تلقائياً عند تسجيل جديد
+  startDate         DateTime?
+  endDate           DateTime?
+  status            CouponStatus @default(ACTIVE)
+  createdAt         DateTime     @default(now())
+  updatedAt         DateTime     @updatedAt
+  usages            CouponUsage[]
+
+  @@index([status, autoApply])
+  @@index([status, endDate, startDate])
+  @@map("coupons")
+}
+
+enum CouponType {
+  PERCENTAGE
+  FIXED
+}
+
+enum CouponStatus {
+  ACTIVE
+  INACTIVE
+  EXPIRED
+}
+
+// ============================================
+// استخدامات الكوبونات (تتبع لكل مستخدم)
+// ============================================
+
+model CouponUsage {
+  id        String   @id @default(cuid())
+  couponId  String
+  coupon    Coupon   @relation(fields: [couponId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  orderId   String?  @unique
+  order     Order?   @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([couponId])
+  @@index([userId])
+  @@index([orderId])
+  @@map("coupon_usages")
+}
+
+// ============================================
+// المفضلة
+// ============================================
+
+model Favorite {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serviceId String
+  service   Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@unique([userId, serviceId])
+  @@map("favorites")
+}
+
+// ============================================
+// الإشعارات
+// ============================================
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  message   String
+  data      Json?
+  read      Boolean  @default(false)
+  dismissed Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([read])
+  @@index([dismissed])
+  @@index([userId, read, dismissed])
+  @@map("notifications")
+}
+
+// ============================================
+// الإعدادات
+// ============================================
+
+model Setting {
+  id        String   @id @default(cuid())
+  key       String   @unique
+  value     Json
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("settings")
+}
+
+// ============================================
+// سلايدات الهيرو
+// ============================================
+
+model Slide {
+  id          String      @id @default(cuid())
+  title       Json        // {ar: "...", en: "..."}
+  subtitle    Json?       // {ar: "...", en: "..."}
+  image       String
+  link        String?     // رابط للانتقال عند الضغط
+  linkText    Json?       // {ar: "...", en: "..."} نص الزر
+  order       Int         @default(0)
+  status      SlideStatus @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([status, order])
+  @@map("slides")
+}
+
+enum SlideStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// ============================================
+// أسعار الصرف
+// ============================================
+
+model ExchangeRate {
+  id           String   @id @default(cuid())
+  fromCurrency String
+  toCurrency   String
+  rate         Decimal  
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([fromCurrency, toCurrency])
+  @@map("exchange_rates")
+}
+
+// ============================================
+// المنصات المدعومة
+// ============================================
+
+model Platform {
+  id        String         @id @default(cuid())
+  name      String         // اسم المنصة
+  slug      String         @unique // رابط مختصر
+  image     String         // صورة/شعار المنصة
+  link      String?        // رابط عند الضغط
+  order     Int            @default(0) // الترتيب
+  status    PlatformStatus @default(ACTIVE)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@index([status, order])
+  @@map("platforms")
+}
+
+enum PlatformStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// ============================================
+// جلسات المصادقة (لـ NextAuth)
+// ============================================
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? 
+  access_token      String? 
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? 
+  session_state     String?
+
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ============================================
+// طرق الدفع المحلية
+// ============================================
+
+model PaymentMethod {
+  id            String   @id @default(cuid())
+  name          Json     // {ar: "تحويل بنكي", en: "Bank Transfer"}
+  description   Json?    // وصف إضافي
+  type          PaymentMethodType @default(MANUAL)
+  icon          String?  // رابط شعار/أيقونة صغيرة
+  instructions  Json?    // تعليمات الدفع {ar: "...", en: "..."}
+  accountInfo   Json?    // بيانات الحساب [{label: {ar,en}, value: "SA..."}]
+  countries     Json?    // ["SA", "AE", "EG"] أو null للكل
+  currencies   Json?    // ["SAR", "AED", "EGP"] أو null للكل
+  isActive      Boolean  @default(true)
+  sortOrder     Int      @default(0)
+  orders        LocalPayment[]
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([isActive, sortOrder])
+  @@map("payment_methods")
+}
+
+enum PaymentMethodType {
+  MANUAL    // تحويل يدوي (بنكي، كاش، إلخ)
+  CRYPTO    // عملات رقمية
+  WALLET    // محفظة رقمية (STC Pay, Vodafone Cash)
+}
+
+// ============================================
+// الدفعات المحلية (إثباتات الدفع)
+// ============================================
+
+model LocalPayment {
+  id            String           @id @default(cuid())
+  orderId       String           @unique
+  order         Order            @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  methodId      String
+  method        PaymentMethod    @relation(fields: [methodId], references: [id], onDelete: Restrict)
+  status        LocalPaymentStatus @default(PENDING)
+  fieldValues   Json?            // قيم الحقول المُدخلة من العميل
+  receiptUrl    String?          // صورة الإيصال
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  reviewNotes   String?          // ملاحظات الأدمن عند الرفض
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+  @@index([methodId])
+  @@map("local_payments")
+}
+
+enum LocalPaymentStatus {
+  PENDING     // بانتظار المراجعة
+  APPROVED    // تمت الموافقة
+  REJECTED    // مرفوض
+}
+
+// ============================================
+// قوالب الرسائل
+// ============================================
+
+model MessageTemplate {
+  id          String   @id @default(cuid())
+  key         String   // order_created, payment_pending, payment_approved, etc.
+  channel     String   @default("notification") // notification | whatsapp | email
+  title       Json?    // {ar: "...", en: "..."}
+  body        Json     // {ar: "...", en: "..."} يدعم متغيرات {{orderNumber}}, {{userName}}, etc.
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([key, channel])
+  @@map("message_templates")
+}
+
+// ============================================
+// إعدادات بوابات الدفع (موحدة)
+// ============================================
+
+model GatewayConfig {
+  id          String   @id @default(cuid())
+  gateway     String   // stripe, moyasar, paytabs, paypal
+  mode        String   // test | live
+  config      Json     // { secretKey, publishableKey, webhookSecret, ... }
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([gateway, mode])
+  @@map("gateway_configs")
+}
+
+// ============================================
+// البارات الإعلانية (Promotional Bars)
+// ============================================
+
+model Bar {
+  id          String      @id @default(cuid())
+  imageAr     String?     // صورة بالعربي (Supabase Storage URL)
+  imageEn     String?     // صورة بالإنجليزي (Supabase Storage URL)
+  title       Json?       // {ar: "...", en: "..."} عنوان اختياري
+  clickable   Boolean     @default(false) // قابل للضغط
+  link        String?     // رابط الوجهة
+  linkType    BarLinkType @default(NONE) // نوع الرابط
+  section     String      // الموقع في الصفحة: AFTER_HERO, AFTER_CATEGORIES, etc.
+  order       Int         @default(0) // الترتيب ضمن الموقع
+  status      BarStatus   @default(ACTIVE)
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([section])
+  @@index([status])
+  @@index([section, order])
+  @@map("bars")
+}
+
+enum BarLinkType {
+  NONE       // بدون رابط
+  CATEGORY   // قسم من الأقسام
+  SERVICE    // خدمة من الخدمات
+  CUSTOM     // رابط مخصص (خارجي)
+}
+
+enum BarStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// ============================================
+// محتوى الصفحات القانونية
+// ============================================
+
+model PageContent {
+  id          String   @id @default(cuid())
+  pageKey     String   @unique // privacy, terms, about, etc.
+  title       Json     // {ar: "...", en: "..."}
+  subtitle    Json?    // {ar: "...", en: "..."}
+  intro       Json?    // {ar: "...", en: "..."} فقرة مقدمة
+  sections    Json?    // [{title: {ar, en}, content: {ar, en}, icon: "Shield", gradient: "..."}]
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("page_contents")
+}
+
+// ============================================
+// عروض الفلاش (Flash Sales)
+// ============================================
+
+model FlashSale {
+  id              String          @id @default(cuid())
+  serviceId       String
+  service         Service         @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  priceId         String?         // null = all price tiers, specific = one tier only
+  name            Json            // {ar: "...", en: "..."} عرض خاص على خدمة X
+  discountPercent Int             // 15 = 15% discount on the service price
+  maxUses         Int?            // null = unlimited
+  usedCount       Int             @default(0)
+  startDate       DateTime
+  endDate         DateTime
+  status          FlashSaleStatus @default(ACTIVE)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([serviceId])
+  @@index([status])
+  @@index([startDate, endDate])
+  @@map("flash_sales")
+}
+
+enum FlashSaleStatus {
+  ACTIVE
+  PAUSED
+  EXPIRED
+}
+
+// ============================================
+// مشرفي بوت تيليجرام
+// ============================================
+
+model BotAdmin {
+  id        String       @id @default(cuid())
+  chatId    String       @unique // Telegram Chat ID
+  name      String?
+  addedBy   String?      // Chat ID of admin who added this admin
+  role      BotAdminRole @default(admin) // super | admin
+  isActive  Boolean      @default(true)
+  addedAt   DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  @@map("bot_admins")
+}
+
+enum BotAdminRole {
+  super
+  admin
+}
