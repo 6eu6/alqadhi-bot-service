@@ -53,3 +53,36 @@ Stage Summary:
 - Modified: src/app/api/admin/payments/[id]/route.ts (stock decrement for both local and regular)
 - Modified: src/app/api/webhooks/[gateway]/route.ts (uses shared function)
 - TypeScript build: PASSED (no errors)
+
+---
+Task ID: 3
+Agent: Main Agent
+Task: Remove "Platforms We Support" section — homepage, admin, APIs, and all references
+
+Work Log:
+- Identified all files referencing platforms (14 files total)
+- Deleted files:
+  - src/components/sections/PlatformsMarquee.tsx
+  - src/app/admin/platforms/page.tsx
+  - src/app/api/platforms/route.ts
+  - src/app/api/admin/platforms/route.ts
+  - src/app/api/admin/platforms/[id]/route.ts
+- Cleaned references in 10 remaining files:
+  - src/contexts/HomeContext.tsx: Removed platforms from HomeData, usePlatforms hook
+  - src/components/sections/HomePageSections.tsx: Removed PlatformsMarquee import + rendering + AFTER_PLATFORMS bar
+  - src/components/layout/AdminSidebar.tsx: Removed platforms nav link + Gamepad2 icon import
+  - src/app/api/home/route.ts: Removed platforms DB query + response field
+  - src/app/api/admin/bars/route.ts: Removed AFTER_PLATFORMS from VALID_SECTIONS
+  - src/app/api/admin/bars/[id]/route.ts: Removed AFTER_PLATFORMS from VALID_SECTIONS
+  - src/app/admin/bars/page.tsx: Removed AFTER_PLATFORMS from SECTION_OPTIONS
+  - src/messages/ar.json: Removed home.platforms, adminNav.platforms, admin.platforms, bars.sectionAfterPlatforms
+  - src/messages/en.json: Same removals as ar.json
+  - src/lib/validations/index.ts: Removed updatePlatformSchema + UpdatePlatformInput type
+  - src/lib/naming.ts: Removed 'platform' from model union, FileContext type, FILE_PREFIXES, and comments
+  - prisma/schema.prisma: Removed Platform model + PlatformStatus enum
+
+Stage Summary:
+- 5 files deleted (component, page, 3 API routes)
+- 12 files modified (context, homepage, sidebar, home API, 2 bar APIs, bars page, 2 i18n, validations, naming, schema)
+- 0 remaining references to platforms in src/ (verified via grep)
+- Note: Prisma migration needed for production DB (DROP TABLE platforms, DROP TYPE PlatformStatus)
