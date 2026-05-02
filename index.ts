@@ -68,12 +68,11 @@ try {
   console.log('[env] No local .env found — using platform environment variables')
 }
 
-// Set DATABASE_URL for Prisma (use transaction-mode pooler for more connections)
-process.env.DATABASE_URL = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL || ''
+// Prisma reads SUPABASE_DATABASE_URL directly (see §2 below)
 
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN
 const SUPER_ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID
-const SERVICE_PORT = 3099
+const SERVICE_PORT = parseInt(process.env.PORT || '3099', 10)
 const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000'
 
@@ -92,7 +91,7 @@ if (!SUPER_ADMIN_CHAT_ID) {
 // =============================================================================
 
 // Add connection_limit for Supabase pooler to avoid MaxClientsInSessionMode
-let botDbUrl = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL || ''
+let botDbUrl = process.env.SUPABASE_DATABASE_URL || ''
 if (botDbUrl && !botDbUrl.includes('connection_limit')) {
   const separator = botDbUrl.includes('?') ? '&' : '?'
   botDbUrl = `${botDbUrl}${separator}connection_limit=5&pool_timeout=20`
@@ -1808,7 +1807,8 @@ process.on('unhandledRejection', (reason, promise) => {
 process.on('uncaughtException', (err) => {
   log('process', 'UNCAUGHT EXCEPTION:', err?.message || err)
   log('process', `  Stack: ${err?.stack || 'N/A'}`)
-  // Do NOT exit — keep the bot running (log only)
+  // Exit to let the process manager (Render/Railway) restart cleanly
+  process.exit(1)
 })
 
 // =============================================================================
@@ -1835,12 +1835,14 @@ async function checkTelegramConnection(): Promise<{ ok: boolean; botUsername: st
 }
 
 const server = createServer(async (req, res) => {
-  if (req.url === '/health') {
+  // Extract pathname only (ignore query strings like /health?foo=bar)
+  const pathname = req.url?.split('?')[0] || ''
+  if (pathname === '/health') {
     const telegram = await checkTelegramConnection()
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({
       status: telegram.ok ? 'ok' : 'degraded',
-      service: 'alqadi-bot-service',
+      service: 'alqadhi-bot-service',
       telegram: {
         connected: telegram.ok,
         botUsername: telegram.botUsername,
