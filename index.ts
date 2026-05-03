@@ -213,6 +213,8 @@ const PAYMENT_STATUS_AR: Record<string, string> = {
 }
 
 // Order event types for notifications
+// ⚠️ SYNC: Must match BOT_CUSTOMER_EVENTS in al-qadhi-store/src/lib/notification-constants.ts
+// Current store values: payment_approved | payment_rejected | order_processing | order_completed | order_cancelled
 type OrderEvent = 'payment_approved' | 'payment_rejected' | 'order_processing' | 'order_completed' | 'order_cancelled'
 
 const EVENT_META: Record<OrderEvent, { emoji: string; label: string }> = {
@@ -438,27 +440,49 @@ function clearConversation(chatId: string) {
 }
 
 // =============================================================================
-// §7  STOCK MANAGEMENT
+// §7  STORE API CLIENT — Centralized order operations via store's internal API
 // =============================================================================
 
 /**
- * Atomically decrement stock for all items in an order.
- * Uses `where: { stock: { not: null, gte: quantity } }` to ensure
- * stock is only decremented for prices that have stock limits and sufficient quantity.
+ * Call the Next.js store's internal order API.
+ * All write operations (approve, reject, ship, complete) go through this
+ * single function — ensuring the store is the Single Source of Truth.
  */
-async function decrementOrderStock(orderId: string): Promise<void> {
-  await db.$transaction(async (tx) => {
-    const orderItems = await tx.orderItem.findMany({
-      where: { orderId },
-      select: { priceId: true, quantity: true },
+async function callStoreOrderApi(
+  orderId: string,
+  action: 'approve' | 'reject' | 'process' | 'complete',
+  extra?: { reason?: string },
+): Promise<{ success: boolean; data?: any; error?: string }> {
+  if (!INTERNAL_SECRET) {
+    log('api', 'ERROR No INTERNAL_API_SECRET configured — cannot call store API')
+    return { success: false, error: 'API secret not configured' }
+  }
+
+  try {
+    const body: Record<string, string> = { action }
+    if (extra?.reason) body.reason = extra.reason
+
+    const response = await fetch(`${API_BASE_URL}/api/internal/order/${orderId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Internal-Secret': INTERNAL_SECRET,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15_000),
     })
-    for (const item of orderItems) {
-      await tx.servicePrice.updateMany({
-        where: { id: item.priceId, stock: { not: null, gte: item.quantity } },
-        data: { stock: { decrement: item.quantity } },
-      })
+
+    const result = await response.json()
+    if (!response.ok) {
+      log('api', `ERROR Store API ${action} failed: ${response.status}`, result.error || '')
+      return { success: false, error: result.error || `HTTP ${response.status}` }
     }
-  })
+
+    return result
+  } catch (err: any) {
+    log('api', `ERROR Store API ${action} request failed:`, err?.message || err)
+    return { success: false, error: err?.message || 'Network error' }
+  }
 }
 
 // =============================================================================
@@ -539,45 +563,6 @@ async function sendAdminNotification(
     }
   } catch (err) {
     log('notify', 'ERROR Failed to build admin notification:', err)
-  }
-}
-
-/**
- * Trigger customer notification (email + in-app) by calling the Next.js internal API.
- * Errors are logged but never thrown — notification failure shouldn't break the bot action.
- */
-async function triggerCustomerNotification(
-  orderId: string,
-  event: OrderEvent,
-  reason?: string,
-): Promise<void> {
-  try {
-    if (!INTERNAL_SECRET) {
-      log('notify', 'WARN No INTERNAL_API_SECRET configured — skipping customer notification')
-      return
-    }
-
-    const body: Record<string, string> = { orderId, event }
-    if (reason) body.reason = reason
-
-    const response = await fetch(`${API_BASE_URL}/api/internal/notify`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Internal-Secret': INTERNAL_SECRET,
-      },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(10_000),
-    })
-
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '')
-      log('notify', `ERROR Customer notification API failed: ${response.status} ${errorText}`)
-    } else {
-      log('notify', `Customer notification triggered for ${event} (order: ${orderId})`)
-    }
-  } catch (err) {
-    log('notify', 'ERROR Failed to trigger customer notification:', err)
   }
 }
 
@@ -1006,48 +991,25 @@ bot.action(/^pay_approve_(.+)$/, async (ctx) => {
       return ctx.editMessageText('⚠️ الطلب غير موجود', { parse_mode: 'HTML' })
     }
 
-    // Atomic update with WHERE condition — prevents double approval race condition
-    await db.$transaction(async (tx) => {
-      const updated = await tx.order.updateMany({
-        where: { id: orderId, paymentStatus: { not: 'PAID' } },
-        data: { paymentStatus: 'PAID', status: 'PROCESSING' },
-      })
-      if (updated.count === 0) {
-        throw new Error('ALREADY_PAID')
-      }
+    // Delegate to store's centralized API (atomic: order + payment + stock + notification)
+    const result = await callStoreOrderApi(orderId, 'approve')
 
-      // Update local payment if exists
-      if (order.localPayment) {
-        await tx.localPayment.update({
-          where: { id: order.localPayment.id },
-          data: { status: 'APPROVED', reviewedAt: new Date() },
-        })
+    if (!result.success) {
+      if (result.error === 'ALREADY_PAID') {
+        return ctx.editMessageText(
+          `ℹ️ تم تأكيد هذا الطلب بالفعل بواسطة مسؤول آخر\n\n📋 <code>${escapeCode(ctx.match![1])}</code>`,
+          { parse_mode: 'HTML' },
+        )
       }
+      const errMsg = result.error || 'حدث خطأ داخلي'
+      log('callback', `pay_approve FAILED: ${errMsg}`)
+      try { await ctx.answerCbQuery('❌ حدث خطأ') } catch { /* ignore */ }
+      try { await ctx.replyWithHTML(`⚠️ خطأ في تأكيد الدفع\n\n${errMsg}`) } catch { /* ignore */ }
+      return
+    }
 
-      // Update Stripe payment if exists
-      if (order.payment) {
-        await tx.payment.updateMany({ where: { orderId }, data: { status: 'PAID' } })
-          .catch((err) => log('payment', 'WARN Failed to update Stripe payment status:', err))
-      }
-
-      // Decrement stock atomically within the same transaction
-      const orderItems = await tx.orderItem.findMany({
-        where: { orderId },
-        select: { priceId: true, quantity: true },
-      })
-      for (const item of orderItems) {
-        await tx.servicePrice.updateMany({
-          where: { id: item.priceId, stock: { not: null, gte: item.quantity } },
-          data: { stock: { decrement: item.quantity } },
-        })
-      }
-    })
-
-    // Send notifications
-    await Promise.all([
-      sendAdminNotification(order, 'payment_approved'),
-      triggerCustomerNotification(orderId, 'payment_approved'),
-    ])
+    // Send admin Telegram notification (customer notification handled by store API)
+    await sendAdminNotification(order, 'payment_approved')
 
     await ctx.editMessageText(
       `✅ <b>تم تأكيد استلام الدفع!</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ⚙️ قيد التنفيذ\n👤 العميل: ${sanitize(order.user.name)}\n📧✅ تم إرسال إشعار للعميل`,
@@ -1055,12 +1017,6 @@ bot.action(/^pay_approve_(.+)$/, async (ctx) => {
     )
     log('callback', `pay_approve SUCCESS orderId=${orderId}`)
   } catch (err: any) {
-    if (err?.message === 'ALREADY_PAID') {
-      return ctx.editMessageText(
-        `ℹ️ تم تأكيد هذا الطلب بالفعل بواسطة مسؤول آخر\n\n📋 <code>${escapeCode(ctx.match![1])}</code>`,
-        { parse_mode: 'HTML' },
-      )
-    }
     const msg = err?.message || 'Unknown'
     log('callback', `ERROR pay_approve: ${msg}`, err)
     try {
@@ -1279,53 +1235,32 @@ bot.action(/^ship_start_(.+)$/, async (ctx) => {
 
     // Payment check before shipping
     const isUnpaid = order.paymentStatus !== 'PAID'
-    const isManualPayment = !order.paymentMethod || order.paymentMethod === 'LOCAL'
     const ONLINE_PAYMENT_METHODS = ['STRIPE', 'MOYASAR', 'PAYTABS', 'PAYPAL']
 
     if (isUnpaid) {
       if (ONLINE_PAYMENT_METHODS.includes(order.paymentMethod || '')) {
-        // STRICT: Online payment orders must be PAID before shipping
-        // This prevents shipping orders where payment hasn't been confirmed by the gateway
-        log('callback', `BLOCK ship_start: order ${orderId} uses online payment (${order.paymentMethod}) but is not PAID (status=${order.paymentStatus})`)
+        log('callback', `BLOCK ship_start: order ${orderId} uses online payment (${order.paymentMethod}) but is not PAID`)
         return ctx.editMessageText(
           `🚫 <b>لا يمكن الشحن — الدفع غير مؤكد</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n💳 طريقة الدفع: ${order.paymentMethod}\n📊 حالة الدفع: ${order.paymentStatus}\n\n⚠️ يجب تأكيد الدفع من بوابة الدفع الإلكترونية أولاً قبل الشحن.\nإذا تم الدفع بالفعل، تحقق من حالة الويب هوك أو اضغط "تأكيد الاستلام".`,
           { parse_mode: 'HTML' },
         )
       }
-      // For manual/local payments, warn but still allow shipping
-      // The admin should approve payment first via pay_approve
-      log('callback', `WARN ship_start: order ${orderId} is unpaid (paymentStatus=${order.paymentStatus}, method=${order.paymentMethod || 'LOCAL'}). Allowing with warning.`)
+      log('callback', `WARN ship_start: order ${orderId} is unpaid. Allowing with warning.`)
     }
 
-    // Atomic update with WHERE condition — prevents race condition
-    // Only update order status to PROCESSING, do NOT force paymentStatus to PAID
-    // If paymentStatus was already PAID (gateway or pay_approve), keep it
-    // If paymentStatus is still PENDING, leave it as-is — admin must approve payment separately
-    const updateData: { status: string; paymentStatus?: string } = { status: 'PROCESSING' }
+    // Delegate to store's centralized API
+    const result = await callStoreOrderApi(orderId, 'process')
 
-    // Only set paymentStatus to PAID if it's not already set (preserve existing state)
-    // This prevents corrupting revenue reports by marking unpaid orders as PAID
-    if (order.paymentStatus === 'PAID') {
-      // Already paid — keep it as PAID
-      updateData.paymentStatus = 'PAID'
-    }
-    // If not PAID, we do NOT set paymentStatus — it remains whatever it was (PENDING, etc.)
-
-    const updated = await db.order.updateMany({
-      where: { id: orderId, status: { notIn: ['COMPLETED', 'PROCESSING'] } },
-      data: updateData,
-    })
-    if (updated.count === 0) {
-      return ctx.editMessageText(
-        `ℹ️ هذا الطلب قيد التنفيذ أو مكتمل بالفعل\n\n📋 <code>${escapeCode(order.orderNumber)}</code>`,
-        { parse_mode: 'HTML' },
-      )
+    if (!result.success) {
+      const errMsg = result.error || 'حدث خطأ داخلي'
+      log('callback', `ship_start FAILED: ${errMsg}`)
+      try { await ctx.answerCbQuery('❌ حدث خطأ') } catch { /* ignore */ }
+      try { await ctx.replyWithHTML(`⚠️ خطأ\n\n${errMsg}`) } catch { /* ignore */ }
+      return
     }
 
-    await Promise.all([
-      sendAdminNotification(order, 'order_processing'),
-      triggerCustomerNotification(orderId, 'order_processing'),
-    ])
+    // Send admin Telegram notification (customer notification handled by store API)
+    await sendAdminNotification(order, 'order_processing')
 
     const unpaidWarning = isUnpaid
       ? '\n\n⚠️ <b>تنبيه:</b> الطلب لم يتم تأكيد دفعه بعد! يرجى تأكيد الدفع عبر زر "تأكيد الاستلام" أولاً.'
@@ -1367,30 +1302,19 @@ bot.action(/^ship_done_(.+)$/, async (ctx) => {
     })
     if (!order) return ctx.editMessageText('⚠️ الطلب غير موجود', { parse_mode: 'HTML' })
 
-    // Track whether stock should be decremented (idempotency)
-    const wasAlreadyPaid = order.paymentStatus === 'PAID'
+    // Delegate to store's centralized API (handles: order update + idempotent stock decrement)
+    const result = await callStoreOrderApi(orderId, 'complete')
 
-    // Atomic update with WHERE condition — prevents double completion race condition
-    const updated = await db.order.updateMany({
-      where: { id: orderId, status: { not: 'COMPLETED' } },
-      data: { status: 'COMPLETED', paymentStatus: 'PAID' },
-    })
-    if (updated.count === 0) {
-      return ctx.editMessageText(
-        `ℹ️ هذا الطلب مكتمل بالفعل بواسطة مسؤول آخر\n\n📋 <code>${escapeCode(order.orderNumber)}</code>`,
-        { parse_mode: 'HTML' },
-      )
+    if (!result.success) {
+      const errMsg = result.error || 'حدث خطأ داخلي'
+      log('callback', `ship_done FAILED: ${errMsg}`)
+      try { await ctx.answerCbQuery('❌ حدث خطأ') } catch { /* ignore */ }
+      try { await ctx.replyWithHTML(`⚠️ خطأ\n\n${errMsg}`) } catch { /* ignore */ }
+      return
     }
 
-    // Decrement stock atomically — only if payment was NOT already confirmed
-    if (!wasAlreadyPaid) {
-      await decrementOrderStock(orderId)
-    }
-
-    await Promise.all([
-      sendAdminNotification(order, 'order_completed'),
-      triggerCustomerNotification(orderId, 'order_completed'),
-    ])
+    // Send admin Telegram notification (customer notification handled by store API)
+    await sendAdminNotification(order, 'order_completed')
 
     await ctx.editMessageText(
       `🎉 <b>تم الشحن بنجاح!</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ✅ مكتمل ومشحون\n👤 العميل: ${sanitize(order.user.name)}\n📧✅ تم إرسال إشعار للعميل`,
@@ -1538,17 +1462,15 @@ bot.on('text', async (ctx, next) => {
     try {
       const order = await db.order.findUnique({
         where: { id: conv.orderId },
-        include: {
-          user: { select: { id: true, name: true, email: true, country: true, phone: true } },
-          localPayment: { select: { id: true, receiptUrl: true } },
-          payment: { select: { id: true } },
-          couponUsage: { select: { id: true, couponId: true } },
-          items: { select: { id: true } },
+        select: {
+          id: true, orderNumber: true,
+          user: { select: { name: true, email: true, country: true, phone: true } },
+          total: true, currency: true,
+          paymentMethod: true, paymentStatus: true,
         },
       })
       if (!order) return sendKeyboard(ctx, '⚠️ الطلب غير موجود')
 
-      // حفظ بيانات الطلب للإشعارات
       const orderSnapshot = {
         id: order.id,
         orderNumber: order.orderNumber,
@@ -1559,45 +1481,16 @@ bot.on('text', async (ctx, next) => {
         paymentStatus: order.paymentStatus,
       }
 
-      // تحديث الطلب إلى مرفوض بدلاً من حذفه (soft-delete)
-      // هذا يحافظ على سجل المراجعة ولا يفقد البيانات
-      await db.$transaction(async (tx) => {
-        // تحديث حالة الطلب إلى REJECTED
-        await tx.order.update({
-          where: { id: conv.orderId },
-          data: { status: 'REJECTED', paymentStatus: 'FAILED' },
-        })
+      // Delegate to store's centralized API (handles: order + payments + coupon cleanup + notification)
+      const result = await callStoreOrderApi(conv.orderId!, 'reject', { reason: text })
 
-        // تحديث حالة الدفع المحلي إن وجد
-        if (order.localPayment) {
-          await tx.localPayment.update({
-            where: { id: order.localPayment.id },
-            data: { status: 'REJECTED', reviewedAt: new Date() },
-          })
-        }
+      if (!result.success) {
+        const errMsg = result.error || 'حدث خطأ داخلي'
+        log('bot', `ERROR reject order via API: ${errMsg}`)
+        return sendKeyboard(ctx, `⚠️ خطأ في رفض الطلب\n\n${errMsg}`)
+      }
 
-        // تحديث حالة الدفع الإلكتروني إن وجد
-        if (order.payment) {
-          await tx.payment.updateMany({
-            where: { orderId: conv.orderId },
-            data: { status: 'FAILED' },
-          })
-        }
-
-        // حذف CouponUsage وتنقيص coupon.usedCount إن وجد كوبون مستخدم
-        if (order.couponUsage) {
-          await tx.couponUsage.delete({ where: { id: order.couponUsage.id } })
-          await tx.coupon.update({
-            where: { id: order.couponUsage.couponId },
-            data: { usedCount: { decrement: 1 } },
-          })
-        }
-      })
-
-      // إرسال إشعار للعميل
-      await triggerCustomerNotification(conv.orderId!, 'payment_rejected', text)
-
-      // إرسال إشعار للأدمن
+      // Send admin Telegram notification (customer notification handled by store API)
       await sendAdminNotification(orderSnapshot, 'payment_rejected', text)
 
       return sendKeyboard(ctx,
