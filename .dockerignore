@@ -1,0 +1,12 @@
+node_modules
+.next
+.env
+.env.local
+*.log
+skills/
+upload/
+download/
+worklog.md
+README.md
+.git
+.gitignore
