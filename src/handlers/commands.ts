@@ -5,27 +5,53 @@
 
 import { Telegraf } from 'telegraf'
 import { sanitize, getStoreName, log } from '../helpers.js'
-import { isSuperAdmin, sendKeyboard } from '../admin.js'
+import { isSuperAdmin, sendKeyboard, adminCache, refreshAdminCache } from '../admin.js'
 import { sendWebhookOrderNotification } from '../notifications.js'
 
 export function registerCommandHandlers(bot: Telegraf<any>) {
 
-  // ─── /testnotify — إرسال إشعار تجريبي للتحقق من عمل الإشعارات ─────────
+  // ─── /testnotify — إرسال إشعار تجريبي لكل المشرفين ──────────────────
+  // ★ يرسل لكل المشرفين النشطين (مواضع متعددة) — يختبر نظام الإشعارات بالكامل
   bot.command('testnotify', async (ctx) => {
     const chatId = ctx.chat?.id
     if (!chatId) return
 
     try {
-      await ctx.reply('🔔 جاري إرسال إشعار تجريبي...')
+      // ★ حدّث الكاش أول — يضمن أن المشرفين الجدد يشملون
+      await refreshAdminCache()
+      const targetChatIds = Array.from(adminCache)
 
-      // إرسال رسالة تجريبية مباشرة
-      await bot.telegram.sendMessage(
-        String(chatId),
-        `🔔 <b>إشعار تجريبي — النظام يعمل!</b>\n\n✅ تم إرسال هذا الإشعار بنجاح\n📡 البوت متصل ويعمل\n⏰ ${new Date().toISOString()}\n\n💡 إذا وصلك هذا الإشعار، فنظام الإشعارات يعمل بشكل صحيح.`,
-        { parse_mode: 'HTML' }
-      )
+      if (targetChatIds.length === 0) {
+        return ctx.reply('⚠️ لا يوجد مشرفين نشطين في النظام')
+      }
 
-      log('testnotify', `Test notification sent to chat ${chatId}`)
+      await ctx.reply(`🔔 جاري إرسال إشعار تجريبي لـ ${targetChatIds.length} مشرف...`)
+
+      let sentCount = 0
+      let failCount = 0
+      const results: string[] = []
+
+      for (const targetId of targetChatIds) {
+        try {
+          await bot.telegram.sendMessage(
+            targetId,
+            `🔔 <b>إشعار تجريبي — النظام يعمل!</b>\n\n✅ تم إرسال هذا الإشعار بنجاح\n📡 البوت متصل ويعمل\n🔢 Chat ID: <code>${targetId}</code>\n👥 إجمالي المشرفين: ${targetChatIds.length}\n⏰ ${new Date().toISOString()}\n\n💡 إذا وصلك هذا الإشعار، فنظام الإشعارات يعمل بشكل صحيح.`,
+            { parse_mode: 'HTML' }
+          )
+          sentCount++
+          results.push(`✅ ${targetId}`)
+        } catch (err: any) {
+          failCount++
+          results.push(`❌ ${targetId} — ${err?.message || 'خطأ'}`)
+          log('testnotify', `FAILED to send to ${targetId}:`, err?.message)
+        }
+      }
+
+      // أظهر النتيجة لمن أرسل الأمر
+      const summary = `📊 <b>نتيجة الاختبار:</b>\n\n✅ نجح: ${sentCount}\n❌ فشل: ${failCount}\n👥 الإجمالي: ${targetChatIds.length}\n\n${results.join('\n')}`
+      await ctx.reply(summary, { parse_mode: 'HTML' })
+
+      log('testnotify', `Test notification: ${sentCount}/${targetChatIds} sent successfully`)
     } catch (err: any) {
       log('testnotify', `ERROR: ${err?.message}`, err)
       await ctx.reply(`❌ فشل إرسال الإشعار التجريبي: ${err?.message || 'خطأ غير معروف'}`)

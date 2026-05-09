@@ -7,7 +7,7 @@ import { Telegraf } from 'telegraf'
 import { db } from './database.js'
 import { sanitize, escapeCode, formatDate, formatAmount, getText, log, getStoreName } from './helpers.js'
 import { EVENT_META, WEBHOOK_EVENT_META, OrderEvent, WebhookEvent, getPaymentMethodLabel } from './constants.js'
-import { adminCache, superAdminCache } from './admin.js'
+import { adminCache, superAdminCache, refreshAdminCache, isCacheStale } from './admin.js'
 import { buildNotificationButtons, buildWebhookNotificationButtons } from './keyboards.js'
 import { SUPER_ADMIN_CHAT_ID } from './config.js'
 
@@ -21,9 +21,14 @@ export function initNotifications(botInstance: Telegraf<any>) {
 
 /**
  * Get the list of target chat IDs for notifications.
+ * ★ يحدّث الكاش لو قديم — يضمن إن المشرفين الجدد توصلهم الإشعارات
  * Returns all active admins, or falls back to the super admin from env.
  */
-function getTargetChatIds(): string[] {
+async function getTargetChatIds(): Promise<string[]> {
+  // ★ حدّث الكاش لو قديم — يضمن وصول الإشعارات للمشرفين الجدد
+  if (isCacheStale() || adminCache.size === 0) {
+    await refreshAdminCache()
+  }
   return adminCache.size > 0
     ? Array.from(adminCache)
     : [String(SUPER_ADMIN_CHAT_ID)]
@@ -114,7 +119,7 @@ export async function sendAdminNotification(
     // ★ إرسال لجميع المشرفين النشطين — باستثناء المشرف الذي أجرى الإجراء
     // المشرف الفعّال يشوف نتيجة إجرائه عبر ctx.editMessageText() مباشرة
     // فما يحتاج يشوف رسالة إشعار ثانية لنفس الحدث
-    const targetChatIds = getTargetChatIds().filter(id => id !== excludeChatId)
+    const targetChatIds = (await getTargetChatIds()).filter(id => id !== excludeChatId)
 
     let sentCount = 0
     for (const chatId of targetChatIds) {
@@ -286,7 +291,7 @@ export async function sendWebhookOrderNotification(
     }
 
     // Send to ALL active admins
-    const targetChatIds = getTargetChatIds()
+    const targetChatIds = await getTargetChatIds()
 
     let sentCount = 0
     for (const chatId of targetChatIds) {

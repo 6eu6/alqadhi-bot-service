@@ -15,6 +15,11 @@ export let superAdminCache: Set<string> = new Set()
 let lastCacheRefresh = 0
 const CACHE_TTL = 5 * 60 * 1000 // 5 minutes
 
+/** Check if the admin cache is stale and needs refreshing */
+export function isCacheStale(): boolean {
+  return Date.now() - lastCacheRefresh > CACHE_TTL
+}
+
 export async function refreshAdminCache(): Promise<void> {
   try {
     const admins = await db.botAdmin.findMany({
