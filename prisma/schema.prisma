@@ -1,5 +1,9 @@
 // This is your Prisma schema file,
 // متجر القاضي - AlQadi Store
+//
+// ⚠️ IMPORTANT: This schema MUST stay in sync with the store's schema
+// (al-qadhi-store/prisma/schema.prisma). The store is the source of truth
+// for database migrations. The bot only reads from the same database.
 
 generator client {
   provider = "prisma-client-js"
@@ -35,6 +39,7 @@ model User {
   updatedAt     DateTime   @updatedAt
 
   orders        Order[]
+  reviews       Review[]
   favorites     Favorite[]
   notifications Notification[]
   payments      Payment[]
@@ -70,7 +75,7 @@ model Category {
   image       String?
   order       Int             @default(0)
   status      CategoryStatus  @default(ACTIVE)
-  services    Service[]
+  apps        App[]
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
@@ -85,6 +90,34 @@ enum CategoryStatus {
 }
 
 // ============================================
+// التطبيقات
+// ============================================
+
+model App {
+  id          String          @id @default(cuid())
+  name        Json            // {ar: "...", en: "..."}
+  slug        String          @unique
+  image       String?
+  order       Int             @default(0)
+  status      AppStatus       @default(ACTIVE)
+  categoryId  String
+  category    Category        @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  services    Service[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@index([status])
+  @@index([categoryId])
+  @@index([order])
+  @@map("apps")
+}
+
+enum AppStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// ============================================
 // الخدمات
 // ============================================
 
@@ -94,8 +127,8 @@ model Service {
   slug          String        @unique
   description   Json?         // {ar: "...", en: "..."}
   image         String?
-  categoryId    String
-  category      Category      @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  appId         String
+  app           App            @relation(fields: [appId], references: [id], onDelete: Cascade)
   status        ServiceStatus @default(AVAILABLE)
   executionType ExecutionType @default(MANUAL)
   apiEndpoint   String?
@@ -107,10 +140,11 @@ model Service {
   orderItems    OrderItem[]
   favorites     Favorite[]
   flashSales    FlashSale[]
+  reviews       Review[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  @@index([categoryId])
+  @@index([appId])
   @@index([status])
   @@index([featured])
   @@index([status, featured])
@@ -141,8 +175,9 @@ model ServicePrice {
   quantity      Int
   price         Decimal    
   originalPrice Decimal?   
-  baseCost      Decimal    @default(0) // تكلفة المورد — يستخدم لحماية هامش الربح
+  isFixed       Boolean    @default(false) // باقة ثابتة — الكمية غير قابلة للتغيير
   stock         Int?            // المخزون المتاح (null = غير محدود)
+  order         Int        @default(0) // ترتيب العرض (0 = ترتيب تلقائي حسب الكمية)
   orderItems    OrderItem[]
   createdAt     DateTime   @default(now())
   updatedAt     DateTime   @updatedAt
@@ -178,6 +213,7 @@ model Order {
   items         OrderItem[]
   payment       Payment?
   couponUsage   CouponUsage?
+  reviews       Review[]
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
@@ -216,11 +252,10 @@ model OrderItem {
   order     Order           @relation(fields: [orderId], references: [id], onDelete: Cascade)
   serviceId String
   service   Service         @relation(fields: [serviceId], references: [id])
-  priceId   String
-  price     ServicePrice    @relation(fields: [priceId], references: [id])
+  priceId   String?
+  price     ServicePrice?   @relation(fields: [priceId], references: [id])
   quantity  Int             @default(1)
   unitPrice Decimal         // سعر البيع اللحظي ($)
-  baseCost  Decimal         @default(0) // تكلفة المورد اللحظية ($) — لتتبع الربح الفعلي
   inputData Json?           // بيانات العميل
   status    OrderItemStatus @default(PENDING)
   createdAt DateTime        @default(now())
@@ -360,7 +395,7 @@ model Notification {
   message   String
   data      Json?
   read      Boolean  @default(false)
-  dismissed Boolean @default(false)
+  dismissed Boolean  @default(false)
   createdAt DateTime @default(now())
 
   @@index([userId])
@@ -651,6 +686,31 @@ enum FlashSaleStatus {
   ACTIVE
   PAUSED
   EXPIRED
+}
+
+// ============================================
+// التقييمات والتعليقات
+// ============================================
+
+model Review {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  serviceId   String
+  service     Service  @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  orderId     String
+  order       Order    @relation(fields: [orderId], references: [id])
+  rating      Int      // 1-5
+  comment     String?  // اختياري
+  isPublic    Boolean  @default(true)  // الأدمن يقدر يخفي تعليقات غير مناسبة
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, orderId])
+  @@index([serviceId])
+  @@index([isPublic])
+  @@index([createdAt])
+  @@map("reviews")
 }
 
 // ============================================
