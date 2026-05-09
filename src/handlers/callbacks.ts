@@ -17,6 +17,7 @@ import { getEffectiveChatId, sendKeyboard } from '../admin.js'
 import { orderActionKeyboard, orderActionKeyboardAfterAction } from '../keyboards.js'
 import { callStoreOrderApi } from '../store-api.js'
 import { setConversation, clearConversation } from '../conversations.js'
+import { auditLog } from '../audit.js'
 // ★ sendAdminNotification تم إزالته — إجراءات المشرف لا توصل إشعارات لبقية المشرفين
 // كل مشرف يتفاعل مع رسالته فقط، بدون إشعارات متقاطعة
 
@@ -138,6 +139,15 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         },
       )
       log('callback', `pay_approve SUCCESS orderId=${orderId} — verified paymentStatus=PAID in DB`)
+
+      // ★ AUDIT: تسجيل تأكيد الدفع
+      auditLog({
+        action: 'approve_payment',
+        actorId: String(ctx.from?.id || 'unknown'),
+        targetType: 'order',
+        targetId: orderId,
+        details: { orderNumber: order.orderNumber, paymentMethod: order.paymentMethod },
+      })
     } catch (err: any) {
       const msg = err?.message || 'Unknown'
       log('callback', `ERROR pay_approve: ${msg}`, err)
@@ -496,6 +506,15 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         },
       )
       log('callback', `ship_start SUCCESS orderId=${orderId} — verified status=${verified?.status} paymentStatus=${verified?.paymentStatus}`)
+
+      // ★ AUDIT: تسجيل بدء الشحن
+      auditLog({
+        action: 'ship_start',
+        actorId: String(ctx.from?.id || 'unknown'),
+        targetType: 'order',
+        targetId: orderId,
+        details: { orderNumber: order.orderNumber },
+      })
     } catch (err: any) {
       const msg = err?.message || 'Unknown'
       log('callback', `ERROR ship_start: ${msg}`, err)
@@ -584,6 +603,15 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         },
       )
       log('callback', `ship_done SUCCESS orderId=${orderId} — verified status=${verified?.status} paymentStatus=${verified?.paymentStatus}`)
+
+      // ★ AUDIT: تسجيل إكمال الطلب
+      auditLog({
+        action: 'ship_done',
+        actorId: String(ctx.from?.id || 'unknown'),
+        targetType: 'order',
+        targetId: orderId,
+        details: { orderNumber: order.orderNumber },
+      })
     } catch (err: any) {
       const msg = err?.message || 'Unknown'
       log('callback', `ERROR ship_done: ${msg}`, err)

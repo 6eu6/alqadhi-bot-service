@@ -10,6 +10,7 @@ import { SUPER_ADMIN_CHAT_ID } from '../config.js'
 import { isSuperAdmin, refreshAdminCache, sendKeyboard } from '../admin.js'
 import { callStoreOrderApi } from '../store-api.js'
 import { conversations, clearConversation } from '../conversations.js'
+import { auditLog } from '../audit.js'
 // ★ sendAdminNotification تم إزالته — إجراءات المشرف لا توصل إشعارات لبقية المشرفين
 
 export function registerTextHandler(bot: Telegraf<any>) {
@@ -70,6 +71,15 @@ export function registerTextHandler(bot: Telegraf<any>) {
         // ★ لا إشعار للمشرفين الآخرين — المشرف الفعّال شاف النتيجة عبر sendKeyboard()
         // المشرفين الآخرين يقدرون يضغطون أي زر في رسالتهم ويشوفون الحالة الحالية
 
+        // ★ AUDIT: تسجيل رفض الدفع
+        auditLog({
+          action: 'reject_payment',
+          actorId: cid,
+          targetType: 'order',
+          targetId: conv.orderId!,
+          details: { orderNumber: orderSnapshot.orderNumber, reason: cleanReason },
+        })
+
         return sendKeyboard(ctx,
           `🚫 <b>تم رفض الطلب</b>\n\n📋 <code>${escapeCode(orderSnapshot.orderNumber)}</code>\n👤 العميل: ${sanitize(orderSnapshot.user.name)}\n📝 السبب: ${sanitize(text)}\n\n📧 تم إبلاغ العميل عبر البريد ✉️`
         )
@@ -120,6 +130,16 @@ export function registerTextHandler(bot: Telegraf<any>) {
           data: { chatId: target, name: adminName, role: 'admin', addedBy: cid, isActive: true },
         })
         await refreshAdminCache()
+
+        // ★ AUDIT: تسجيل إضافة مشرف
+        auditLog({
+          action: 'add_admin',
+          actorId: cid,
+          targetType: 'admin',
+          targetId: target,
+          details: { name: adminName },
+        })
+
         return sendKeyboard(ctx,
           `✅ <b>تم إضافة مشرف جديد!</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${adminName ? sanitize(adminName) : 'بدون اسم'}\n🔧 الصلاحية: مشرف\n\n🔔 أخبره يرسل /start للبوت`
         )
@@ -152,6 +172,16 @@ export function registerTextHandler(bot: Telegraf<any>) {
 
         await db.botAdmin.update({ where: { chatId: target }, data: { isActive: false } })
         await refreshAdminCache()
+
+        // ★ AUDIT: تسجيل حذف مشرف
+        auditLog({
+          action: 'remove_admin',
+          actorId: cid,
+          targetType: 'admin',
+          targetId: target,
+          details: { name: existing.name },
+        })
+
         return sendKeyboard(ctx,
           `✅ <b>تم حذف المشرف</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}\n\n🔒 لن يتمكن من استخدام البوت بعد الآن`
         )
@@ -187,6 +217,16 @@ export function registerTextHandler(bot: Telegraf<any>) {
         }
         await db.botAdmin.update({ where: { chatId: target }, data: { role: 'super' } })
         await refreshAdminCache()
+
+        // ★ AUDIT: تسجيل ترقية مشرف
+        auditLog({
+          action: 'promote',
+          actorId: cid,
+          targetType: 'admin',
+          targetId: target,
+          details: { name: existing.name, fromRole: 'admin', toRole: 'super' },
+        })
+
         return sendKeyboard(ctx,
           `👑 <b>تمت ترقية المشرف إلى مالك!</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}\n\n✅ الآن لديه صلاحيات كاملة`
         )
@@ -222,6 +262,16 @@ export function registerTextHandler(bot: Telegraf<any>) {
         }
         await db.botAdmin.update({ where: { chatId: target }, data: { role: 'admin' } })
         await refreshAdminCache()
+
+        // ★ AUDIT: تسجيل تخفيض مشرف
+        auditLog({
+          action: 'demote',
+          actorId: cid,
+          targetType: 'admin',
+          targetId: target,
+          details: { name: existing.name, fromRole: 'super', toRole: 'admin' },
+        })
+
         return sendKeyboard(ctx,
           `🛠 <b>تم تخفيض المالك إلى مشرف عادي</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}\n\n🔒 لن يتمكن من إضافة/حذف مشرفين`
         )

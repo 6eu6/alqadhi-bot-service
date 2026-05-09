@@ -103,7 +103,7 @@ export function createHttpServer(bot: Telegraf<any>) {
           return sendJson(res, 400, { error: 'Invalid JSON body' })
         }
 
-        const { event, orderId } = body
+        const { event, orderId, timestamp } = body
 
         // 3. Validate
         if (!event || !orderId) {
@@ -113,6 +113,22 @@ export function createHttpServer(bot: Telegraf<any>) {
         const validEvents: WebhookEvent[] = ['payment_confirmed', 'receipt_uploaded']
         if (!validEvents.includes(event)) {
           return sendJson(res, 400, { error: `Invalid event. Must be one of: ${validEvents.join(', ')}` })
+        }
+
+        // ★ SECURITY: Replay protection — reject stale webhook events (older than 5 minutes)
+        // This prevents replayed webhook payloads from triggering duplicate notifications.
+        if (timestamp) {
+          const eventTime = typeof timestamp === 'number' ? timestamp : new Date(timestamp).getTime()
+          const ageMs = Date.now() - eventTime
+          const MAX_AGE_MS = 5 * 60 * 1000 // 5 minutes
+          if (ageMs > MAX_AGE_MS) {
+            log('webhook', `REJECTED stale webhook: event ${event} for ${orderId} is ${Math.round(ageMs / 1000)}s old (max ${MAX_AGE_MS / 1000}s)`)
+            return sendJson(res, 400, { error: 'Webhook event too old — rejected for replay protection' })
+          }
+          if (ageMs < -30_000) { // Future timestamp tolerance: 30 seconds (clock skew)
+            log('webhook', `REJECTED future webhook: event ${event} for ${orderId} is ${Math.round(-ageMs / 1000)}s in the future`)
+            return sendJson(res, 400, { error: 'Webhook event timestamp is in the future — rejected' })
+          }
         }
 
         if (!isValidOrderId(orderId)) {

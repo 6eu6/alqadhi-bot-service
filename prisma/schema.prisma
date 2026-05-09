@@ -734,3 +734,25 @@ enum BotAdminRole {
   super
   admin
 }
+
+// ============================================
+// سجل التدقيق (Audit Log)
+// ============================================
+
+model AuditLog {
+  id          String   @id @default(cuid())
+  action      String   // approve_payment, reject_payment, ship, complete, add_admin, remove_admin, promote, demote
+  actorId     String?  // Chat ID of the admin who performed the action (bot) or user ID (store)
+  actorType   String   // "bot_admin" | "store_admin"
+  targetType  String?  // "order" | "admin"
+  targetId    String?  // orderId or chatId
+  details     Json?    // Additional context (reason, previous state, etc.)
+  ipAddress   String?  // IP address (store admin actions only)
+  createdAt   DateTime @default(now())
+
+  @@index([action])
+  @@index([actorId])
+  @@index([targetType, targetId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
