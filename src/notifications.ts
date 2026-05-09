@@ -77,18 +77,19 @@ export async function sendAdminNotification(
 
     lines.push('')
     lines.push(`─────────────`)
-    // ★ عرض المبلغ بالعملة المحلية + الدولار
-    if (order.currency !== 'USD') {
-      lines.push(`💰 المبلغ: <b>${formatAmount(Number(order.total), order.currency)}</b>`)
-      if (order.totalUSD) {
-        lines.push(`💵 بالدولار: ${formatAmount(Number(order.totalUSD), 'USD')}`)
-      }
+    // ★ Guarantee: المبلغ + العملة + سعر الصرف دائماً ظاهرة
+    const currency = order.currency || 'USD'
+    if (currency !== 'USD') {
+      lines.push(`💰 المبلغ: <b>${formatAmount(Number(order.total), currency)}</b>`)
+      // ★ Guarantee: حتى لو totalUSD = 0، اعرضه
+      lines.push(`💵 بالدولار: ${formatAmount(Number(order.totalUSD || 0), 'USD')}`)
     } else {
       lines.push(`💰 المبلغ: <b>${formatAmount(Number(order.total), 'USD')}</b>`)
     }
-    if (order.exchangeRate) {
+    if (order.exchangeRate && Number(order.exchangeRate) > 0) {
       lines.push(`💱 سعر الصرف: ${Number(order.exchangeRate).toFixed(4)}`)
     }
+    // ★ Guarantee: طريقة الدفع دائماً ظاهرة بالاسم الدقيق
     lines.push(`💳 الدفع: ${sanitize(paymentMethod)}`)
 
     if (extraNotes && extraNotes.trim().length > 0) {
@@ -245,15 +246,22 @@ export async function sendWebhookOrderNotification(
     lines.push(`─────────────`)
     lines.push(paymentInfo)
     lines.push('')
-    // ★ عرض المبلغ بالعملة المحلية + الدولار
-    if (order.currency !== 'USD') {
-      lines.push(`💰 المبلغ: <b>${formatAmount(order.total, order.currency)}</b>`)
-      lines.push(`💵 بالدولار: ${formatAmount(order.totalUSD, 'USD')}`)
+    // ★ Guarantee: المبلغ + العملة + سعر الصرف دائماً ظاهرة
+    const currency = order.currency || 'USD'
+    if (currency !== 'USD') {
+      lines.push(`💰 المبلغ: <b>${formatAmount(order.total, currency)}</b>`)
+      // ★ Guarantee: حتى لو totalUSD = 0، اعرضه
+      lines.push(`💵 بالدولار: ${formatAmount(Number(order.totalUSD || 0), 'USD')}`)
     } else {
       lines.push(`💰 المبلغ: <b>${formatAmount(order.total, 'USD')}</b>`)
     }
-    if (order.exchangeRate) {
+    if (order.exchangeRate && Number(order.exchangeRate) > 0) {
       lines.push(`💱 سعر الصرف: ${Number(order.exchangeRate).toFixed(4)}`)
+    }
+    // ★ Guarantee: طريقة الدفع دائماً ظاهرة (حتى لو لم تكن في paymentInfo)
+    if (!paymentInfo.includes('💳')) {
+      const fallbackMethod = getPaymentMethodLabel(order.paymentMethod)
+      lines.push(`💳 الدفع: ${sanitize(fallbackMethod)}`)
     }
     lines.push(`⏰ ${formatDate(order.createdAt)}`)
 

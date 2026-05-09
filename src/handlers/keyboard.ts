@@ -6,7 +6,7 @@
 import { Telegraf } from 'telegraf'
 import { db } from '../database.js'
 import { sanitize, escapeCode, formatDate, formatAmount, getText, log, getStoreName } from '../helpers.js'
-import { ORDER_STATUS_AR, PAYMENT_STATUS_AR, KB } from '../constants.js'
+import { ORDER_STATUS_AR, PAYMENT_STATUS_AR, KB, getPaymentMethodLabel } from '../constants.js'
 import { SUPER_ADMIN_CHAT_ID, SERVICE_PORT, WEBHOOK_SECRET } from '../config.js'
 import { isSuperAdmin, adminCache, sendKeyboard } from '../admin.js'
 import { orderActionKeyboard } from '../keyboards.js'
@@ -74,12 +74,26 @@ export function registerKeyboardHandlers(bot: Telegraf<any>) {
             for (const [key, val] of Object.entries(order.localPayment.fieldValues as Record<string, any>)) {
               if (key === '_meta' || !val) continue
               const label = fvLabels?.[key] || key
-              paymentInfo += `\n    ${sanitize(label)}: ${sanitize(String(val))}`
+              paymentInfo += `\n    ${sanitize(label)}: <code>${escapeCode(String(val))}</code>`
             }
           }
         } else if (order.payment?.transactionId) {
-          paymentInfo = `💳 الدفع: Stripe — ${payStatusLabel}\n🔢 المعاملة: <code>${order.payment.transactionId}</code>`
+          const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
+          paymentInfo = `💳 الدفع: ${gatewayLabel} — ${payStatusLabel}\n🔢 المعاملة: <code>${escapeCode(order.payment.transactionId)}</code>`
+        } else {
+          // ★ Guarantee: إذا لا يوجد سجل دفع، اعرض طريقة الدفع من الطلب
+          const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
+          paymentInfo = `💳 الدفع: ${gatewayLabel} — ${payStatusLabel}`
         }
+
+        // ★ Guarantee: عرض العملة المحلية + الدولار + طريقة الدفع
+        const currency = order.currency || 'USD'
+        const priceLine = currency !== 'USD'
+          ? `💰 <b>${formatAmount(order.total, currency)}</b>\n💵 بالدولار: ${formatAmount(Number(order.totalUSD || 0), 'USD')}`
+          : `💰 <b>${formatAmount(order.total, 'USD')}</b>`
+        const exchangeLine = order.exchangeRate && Number(order.exchangeRate) > 0
+          ? `\n💱 سعر الصرف: ${Number(order.exchangeRate).toFixed(4)}`
+          : ''
 
         const msg = [
           `📋 <code>${escapeCode(order.orderNumber)}</code> · ${statusLabel}`,
@@ -95,7 +109,8 @@ export function registerKeyboardHandlers(bot: Telegraf<any>) {
           `─────────────`,
           paymentInfo,
           ``,
-          `💰 <b>${formatAmount(order.total, order.currency)}</b>`,
+          priceLine,
+          exchangeLine,
           `🗓 ${formatDate(order.createdAt)}`,
         ].filter(Boolean).join('\n')
 
