@@ -124,8 +124,9 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         return
       }
 
-      // Send admin Telegram notification (customer notification handled by store API)
-      await sendAdminNotification(order, 'payment_approved')
+      // ★ إرسال إشعار للمشرفين الآخرين — استثناء المشرف الفعّال (شاف النتيجة عبر editMessageText)
+      const actorChatId = String(getEffectiveChatId(ctx))
+      await sendAdminNotification(order, 'payment_approved', undefined, actorChatId)
 
       // ★ تحديث الرسالة مع كيبورد جديد — أزرار الشحن بدل أزرار التأكيد
       await ctx.editMessageText(
@@ -423,10 +424,11 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
 
       // ★ تحقق: الطلب قيد التنفيذ فعلاً (بعد تأكيد الدفع)
       if (order.status === 'PROCESSING') {
-        // الطلب فعلاً في حالة التنفيذ — أرسل إشعار للعميل
-        await sendAdminNotification(order, 'order_processing')
-        // ★ حدث الكيبورد — أزل زر جاري الشحن، أبقِ زر تم الشحن
-        return ctx.editMessageText(
+      // ★ إرسال إشعار للمشرفين الآخرين فقط
+      const actorChatId2 = String(getEffectiveChatId(ctx))
+      await sendAdminNotification(order, 'order_processing', undefined, actorChatId2)
+      // ★ حدث الكيبورد — أزل زر جاري الشحن، أبقِ زر تم الشحن
+      return ctx.editMessageText(
           `📦 <b>الطلب قيد التنفيذ والشحن</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ⚙️ جاري التنفيذ\n💳 الدفع: ✅ مؤكد\n👤 العميل: ${sanitize(order.user.name)}\n📧✅ تم إرسال إشعار للعميل`,
           {
             parse_mode: 'HTML',
@@ -477,8 +479,9 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       // ★ تحقق من قاعدة البيانات أن التغيير تم فعلاً
       const verified = await verifyOrderStatus(orderId)
 
-      // Send admin Telegram notification (customer notification handled by store API)
-      await sendAdminNotification(order, 'order_processing')
+      // ★ إرسال إشعار للمشرفين الآخرين — استثناء المشرف الفعّال
+      const actorChatId3 = String(getEffectiveChatId(ctx))
+      await sendAdminNotification(order, 'order_processing', undefined, actorChatId3)
 
       const unpaidWarning = isUnpaid
         ? '\n\n⚠️ <b>تنبيه:</b> الطلب لم يتم تأكيد دفعه بعد! يرجى تأكيد الدفع عبر زر "تأكيد الاستلام" أولاً.'
@@ -570,8 +573,9 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       // ★ تحقق من قاعدة البيانات أن التغيير تم فعلاً
       const verified = await verifyOrderStatus(orderId)
 
-      // Send admin Telegram notification (customer notification handled by store API)
-      await sendAdminNotification(order, 'order_completed')
+      // ★ إرسال إشعار للمشرفين الآخرين — استثناء المشرف الفعّال
+      const actorChatId4 = String(getEffectiveChatId(ctx))
+      await sendAdminNotification(order, 'order_completed', undefined, actorChatId4)
 
       // ★ حدث الكيبورد — كل أزرار الإجراءات تختفي، فقط التفاصيل
       await ctx.editMessageText(

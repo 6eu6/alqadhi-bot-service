@@ -65,8 +65,9 @@ export function registerTextHandler(bot: Telegraf<any>) {
           return sendKeyboard(ctx, `⚠️ خطأ في رفض الطلب\n\n${errMsg}`)
         }
 
-        // Send admin Telegram notification (customer notification handled by store API)
-        await sendAdminNotification(orderSnapshot, 'payment_rejected', text)
+        // ★ إرسال إشعار للمشرفين الآخرين فقط — استثناء المشرف الفعّال
+        // المشرف الفعّال شاف النتيجة عبر sendKeyboard() مباشرة
+        await sendAdminNotification(orderSnapshot, 'payment_rejected', text, cid)
 
         return sendKeyboard(ctx,
           `🚫 <b>تم رفض الطلب</b>\n\n📋 <code>${escapeCode(orderSnapshot.orderNumber)}</code>\n👤 العميل: ${sanitize(orderSnapshot.user.name)}\n📝 السبب: ${sanitize(text)}\n\n📧 تم إبلاغ العميل عبر البريد ✉️`

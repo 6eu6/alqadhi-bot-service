@@ -49,6 +49,7 @@ export async function sendAdminNotification(
   },
   event: OrderEvent,
   extraNotes?: string,
+  excludeChatId?: string,
 ): Promise<void> {
   if (!bot) {
     log('notify', 'ERROR Bot instance not initialized — call initNotifications() first')
@@ -110,15 +111,23 @@ export async function sendAdminNotification(
       }
     }
 
-    // إرسال لجميع المشرفين النشطين
-    const targetChatIds = getTargetChatIds()
+    // ★ إرسال لجميع المشرفين النشطين — باستثناء المشرف الذي أجرى الإجراء
+    // المشرف الفعّال يشوف نتيجة إجرائه عبر ctx.editMessageText() مباشرة
+    // فما يحتاج يشوف رسالة إشعار ثانية لنفس الحدث
+    const targetChatIds = getTargetChatIds().filter(id => id !== excludeChatId)
 
+    let sentCount = 0
     for (const chatId of targetChatIds) {
       try {
         await bot.telegram.sendMessage(chatId, message, extra)
+        sentCount++
       } catch (err) {
         log('notify', `ERROR Failed to send notification to ${chatId}:`, err)
       }
+    }
+
+    if (targetChatIds.length > 0) {
+      log('notify', `Sent ${event} for order ${order.orderNumber} to ${sentCount}/${targetChatIds.length} admins (excluded: ${excludeChatId || 'none'})`)
     }
   } catch (err) {
     log('notify', 'ERROR Failed to build admin notification:', err)
