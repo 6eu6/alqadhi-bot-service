@@ -213,7 +213,13 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
 
       const itemsList = order.items.map((item: any, i: number) => {
         const svcName = getText(item.service?.name)
-        let line = `  • ${sanitize(svcName)} × ${item.quantity}`
+        const priceName = getText(item.price?.name)
+        let line = `  • ${sanitize(svcName)}`
+        if (priceName && priceName !== '—') {
+          line += `\n    📦 ${sanitize(priceName)} × ${item.quantity}`
+        } else {
+          line += ` × ${item.quantity}`
+        }
         if (item.inputData && typeof item.inputData === 'object') {
           const inputDataMeta = item.inputData._meta as Record<string, any> | undefined
           const fieldLabels = inputDataMeta?.fieldLabels as Record<string, string> | undefined
@@ -237,7 +243,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
           for (const [key, val] of Object.entries(order.localPayment.fieldValues as Record<string, any>)) {
             if (key === '_meta' || !val) continue
             const label = fvLabels?.[key] || key
-            paymentInfo += `\n    ${sanitize(label)}: ${sanitize(String(val))}`
+            paymentInfo += `\n    ${sanitize(label)}: <code>${escapeCode(String(val))}</code>`
           }
         }
       } else if (order.payment?.transactionId) {
@@ -451,11 +457,11 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
           for (const [key, val] of Object.entries(order.localPayment.fieldValues as Record<string, any>)) {
             if (key === '_meta' || !val) continue
             const label = fvLabels?.[key] || key
-            paymentInfo += `\n    ${sanitize(label)}: ${sanitize(String(val))}`
+            paymentInfo += `\n    ${sanitize(label)}: <code>${escapeCode(String(val))}</code>`
           }
         }
       } else if (order.payment?.transactionId) {
-        paymentInfo = `💳 الدفع: Stripe — ${payStatusLabel}\n🔢 المعاملة: ${order.payment.transactionId}`
+        paymentInfo = `💳 الدفع: Stripe — ${payStatusLabel}\n🔢 المعاملة: <code>${escapeCode(order.payment.transactionId)}</code>`
       }
 
       return ctx.replyWithHTML(`

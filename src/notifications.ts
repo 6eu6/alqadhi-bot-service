@@ -162,10 +162,16 @@ export async function sendWebhookOrderNotification(
 
     const storeName = await getStoreName()
 
-    // Build items list
+    // Build items list — with package/plan name (price.name)
     const itemsList = order.items.map((item: any) => {
       const svcName = getText(item.service?.name)
-      let line = `  • ${sanitize(svcName)} × ${item.quantity}`
+      const priceName = getText(item.price?.name)
+      let line = `  • ${sanitize(svcName)}`
+      if (priceName && priceName !== '—') {
+        line += `\n    📦 ${sanitize(priceName)} × ${item.quantity}`
+      } else {
+        line += ` × ${item.quantity}`
+      }
       if (item.inputData && typeof item.inputData === 'object') {
         const inputDataMeta = item.inputData._meta as Record<string, any> | undefined
         const fieldLabels = inputDataMeta?.fieldLabels as Record<string, string> | undefined
@@ -183,17 +189,15 @@ export async function sendWebhookOrderNotification(
     if (event === 'receipt_uploaded' && order.localPayment) {
       const methodName = getText(order.localPayment.method?.name, order.paymentMethod || 'محلي')
       paymentInfo = `💳 الدفع: ${methodName} — ⏳ بانتظار المراجعة`
-      // ★ عرض رابط صورة الإيصال كرابط قابل للضغط
-      if (order.localPayment.receiptUrl) {
-        paymentInfo += `\n🖼 الإيصال: <a href="${order.localPayment.receiptUrl}">عرض الصورة</a>`
-      }
+      // ★ عرض كود الإيصال/المرجع كنص فقط (بدون رابط صورة)
+      // fieldValues تحتوي على كود الإيصال ورقم الحوالة وغيرها
       if (order.localPayment.fieldValues && typeof order.localPayment.fieldValues === 'object') {
         const fvMeta = (order.localPayment.fieldValues as any)._meta as Record<string, any> | undefined
         const fvLabels = fvMeta?.fieldLabels as Record<string, string> | undefined
         for (const [key, val] of Object.entries(order.localPayment.fieldValues as Record<string, any>)) {
           if (key === '_meta' || !val) continue
           const label = fvLabels?.[key] || key
-          paymentInfo += `\n    ${sanitize(label)}: ${sanitize(String(val))}`
+          paymentInfo += `\n    ${sanitize(label)}: <code>${escapeCode(String(val))}</code>`
         }
       }
     } else if (event === 'payment_confirmed') {
