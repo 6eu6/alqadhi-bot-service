@@ -42,9 +42,11 @@ export async function refreshAdminCache(): Promise<void> {
     log('admins', `Cache refreshed: ${adminCache.size} admins (${superAdminCache.size} super)`)
   } catch (err) {
     log('admins', 'ERROR Failed to refresh cache:', err)
-    // Fallback: at least the env super admin
+    // ★ SECURITY: Fallback محدود — فقط المالك الأساسي من المحيط
+    // لا نضيف أي مشرفين آخرين كـ fallback — يمنح صلاحيات عرضية
     adminCache = new Set([String(SUPER_ADMIN_CHAT_ID)])
     superAdminCache = new Set([String(SUPER_ADMIN_CHAT_ID)])
+    log('admins', 'SECURITY: Admin cache fell back to SUPER_ADMIN only — other admins unavailable until DB recovers')
   }
 }
 

@@ -3,13 +3,15 @@
  * Multi-step conversation tracking for reject reasons, admin management, etc.
  */
 
-export type ConversationType = 'reject_reason' | 'reject_confirm' | 'add_admin' | 'remove_admin' | 'promote' | 'demote'
+export type ConversationType = 'reject_reason' | 'reject_confirm' | 'add_admin' | 'remove_admin' | 'promote' | 'demote' | 'promote_confirm' | 'demote_confirm'
 
 export interface ConversationState {
   type: ConversationType
   orderId?: string
   paymentStatus?: string
   paymentMethod?: string | null
+  targetChatId?: string
+  targetName?: string
   timeout: NodeJS.Timeout
 }
 

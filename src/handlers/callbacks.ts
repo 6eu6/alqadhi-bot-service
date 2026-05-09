@@ -13,7 +13,8 @@ import { Telegraf, Markup } from 'telegraf'
 import { db } from '../database.js'
 import { isValidOrderId, sanitize, escapeCode, sanitizeUrl, formatDate, formatAmount, getText, log } from '../helpers.js'
 import { ORDER_STATUS_AR, PAYMENT_STATUS_AR, getPaymentMethodLabel } from '../constants.js'
-import { getEffectiveChatId, sendKeyboard } from '../admin.js'
+import { getEffectiveChatId, sendKeyboard, isSuperAdmin, refreshAdminCache } from '../admin.js'
+import { SUPER_ADMIN_CHAT_ID } from '../config.js'
 import { orderActionKeyboard, orderActionKeyboardAfterAction } from '../keyboards.js'
 import { callStoreOrderApi } from '../store-api.js'
 import { setConversation, clearConversation } from '../conversations.js'
@@ -746,6 +747,151 @@ ${paymentInfo}
         await ctx.replyWithHTML(`⚠️ خطأ\n\nحدث خطأ داخلي — تحقق من السجلات`)
       } catch { /* ignore */ }
     }
+  })
+
+  // ---------------------------------------------------------------------------
+  // 👑 تأكيد الترقية (promote_confirm)
+  // ★ SECURITY: يتطلب تأكيد ثانوي قبل منح صلاحيات مالك
+  // ---------------------------------------------------------------------------
+  bot.action(/^promote_confirm_(.+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery('⚙️ جاري الترقية...')
+      const target = ctx.match![1]
+      const chatId = getEffectiveChatId(ctx)
+      if (!chatId) {
+        return ctx.editMessageText('⚠️ تعذر تحديد المحادثة', { parse_mode: 'HTML' })
+      }
+
+      // ★ DEFENSE IN DEPTH: تحقق مزدوج من صلاحية المالك
+      if (!await isSuperAdmin(chatId)) {
+        log('security', `BLOCK promote_confirm: non-super admin ${chatId} tried to confirm promote`)
+        return ctx.editMessageText('⛔ غير مصرح — هذا الإجراء للمالك فقط 👑', { parse_mode: 'HTML' })
+      }
+
+      // منع ترقية المالك الأساسي
+      if (target === String(SUPER_ADMIN_CHAT_ID)) {
+        return ctx.editMessageText('⚠️ لا يمكن ترقية المالك الأساسي — هو بالفعل مالك 👑', { parse_mode: 'HTML' })
+      }
+
+      const existing = await db.botAdmin.findUnique({ where: { chatId: target } })
+      if (!existing) {
+        return ctx.editMessageText('⚠️ هذا Chat ID غير مسجل كمشرف', { parse_mode: 'HTML' })
+      }
+      if (!existing.isActive) {
+        return ctx.editMessageText('⚠️ هذا المشرف معطّل، فعّله أولاً', { parse_mode: 'HTML' })
+      }
+      if (existing.role === 'super') {
+        return ctx.editMessageText(
+          `ℹ️ هذا المشرف بالفعل مالك 👑\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}`,
+          { parse_mode: 'HTML' },
+        )
+      }
+
+      // تنفيذ الترقية
+      await db.botAdmin.update({ where: { chatId: target }, data: { role: 'super' } })
+      await refreshAdminCache()
+
+      // ★ AUDIT: تسجيل ترقية مشرف
+      auditLog({
+        action: 'promote',
+        actorId: String(chatId),
+        targetType: 'admin',
+        targetId: target,
+        details: { name: existing.name, fromRole: 'admin', toRole: 'super' },
+      })
+
+      await ctx.editMessageText(
+        `👑 <b>تمت ترقية المشرف إلى مالك!</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}\n\n✅ الآن لديه صلاحيات كاملة`,
+        { parse_mode: 'HTML' },
+      )
+      log('callback', `promote_confirm SUCCESS: ${target} promoted to super by ${chatId}`)
+    } catch (err: any) {
+      log('callback', `ERROR promote_confirm: ${err?.message}`, err)
+      try { await ctx.answerCbQuery('❌ حدث خطأ') } catch { /* ignore */ }
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // ❌ إلغاء الترقية (promote_cancel)
+  // ---------------------------------------------------------------------------
+  bot.action(/^promote_cancel_(.+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery('↩️ تم الإلغاء')
+      await ctx.editMessageText('✅ تم إلغاء الترقية.', { parse_mode: 'HTML' })
+    } catch { /* ignore */ }
+  })
+
+  // ---------------------------------------------------------------------------
+  // 🛠 تأكيد التخفيض (demote_confirm)
+  // ★ SECURITY: يتطلب تأكيد ثانوي قبل سحب صلاحيات المالك
+  // ---------------------------------------------------------------------------
+  bot.action(/^demote_confirm_(.+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery('⚙️ جاري التخفيض...')
+      const target = ctx.match![1]
+      const chatId = getEffectiveChatId(ctx)
+      if (!chatId) {
+        return ctx.editMessageText('⚠️ تعذر تحديد المحادثة', { parse_mode: 'HTML' })
+      }
+
+      // ★ DEFENSE IN DEPTH: تحقق مزدوج من صلاحية المالك
+      if (!await isSuperAdmin(chatId)) {
+        log('security', `BLOCK demote_confirm: non-super admin ${chatId} tried to confirm demote`)
+        return ctx.editMessageText('⛔ غير مصرح — هذا الإجراء للمالك فقط 👑', { parse_mode: 'HTML' })
+      }
+
+      // منع تخفيض المالك الأساسي
+      if (target === String(SUPER_ADMIN_CHAT_ID)) {
+        return ctx.editMessageText('⚠️ لا يمكن تخفيض المالك الأساسي', { parse_mode: 'HTML' })
+      }
+      // منع تخفيض النفس
+      if (target === String(chatId)) {
+        return ctx.editMessageText('⚠️ لا يمكنك تخفيض نفسك', { parse_mode: 'HTML' })
+      }
+
+      const existing = await db.botAdmin.findUnique({ where: { chatId: target } })
+      if (!existing) {
+        return ctx.editMessageText('⚠️ هذا Chat ID غير مسجل كمشرف', { parse_mode: 'HTML' })
+      }
+      if (existing.role !== 'super') {
+        return ctx.editMessageText(
+          `ℹ️ هذا المشرف بالفعل مشرف عادي 🛠\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}`,
+          { parse_mode: 'HTML' },
+        )
+      }
+
+      // تنفيذ التخفيض
+      await db.botAdmin.update({ where: { chatId: target }, data: { role: 'admin' } })
+      await refreshAdminCache()
+
+      // ★ AUDIT: تسجيل تخفيض مشرف
+      auditLog({
+        action: 'demote',
+        actorId: String(chatId),
+        targetType: 'admin',
+        targetId: target,
+        details: { name: existing.name, fromRole: 'super', toRole: 'admin' },
+      })
+
+      await ctx.editMessageText(
+        `🛠 <b>تم تخفيض المالك إلى مشرف عادي</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}\n\n🔒 لن يتمكن من إضافة/حذف/ترقية مشرفين`,
+        { parse_mode: 'HTML' },
+      )
+      log('callback', `demote_confirm SUCCESS: ${target} demoted to admin by ${chatId}`)
+    } catch (err: any) {
+      log('callback', `ERROR demote_confirm: ${err?.message}`, err)
+      try { await ctx.answerCbQuery('❌ حدث خطأ') } catch { /* ignore */ }
+    }
+  })
+
+  // ---------------------------------------------------------------------------
+  // ❌ إلغاء التخفيض (demote_cancel)
+  // ---------------------------------------------------------------------------
+  bot.action(/^demote_cancel_(.+)$/, async (ctx) => {
+    try {
+      await ctx.answerCbQuery('↩️ تم الإلغاء')
+      await ctx.editMessageText('✅ تم إلغاء التخفيض.', { parse_mode: 'HTML' })
+    } catch { /* ignore */ }
   })
 
   // ---------------------------------------------------------------------------

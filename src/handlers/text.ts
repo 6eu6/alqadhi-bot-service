@@ -3,13 +3,13 @@
  * Multi-step conversation flows for reject_reason, add_admin, remove_admin, promote, demote.
  */
 
-import { Telegraf } from 'telegraf'
+import { Telegraf, Markup } from 'telegraf'
 import { db } from '../database.js'
 import { sanitize, escapeCode, log } from '../helpers.js'
 import { SUPER_ADMIN_CHAT_ID } from '../config.js'
 import { isSuperAdmin, refreshAdminCache, sendKeyboard } from '../admin.js'
 import { callStoreOrderApi } from '../store-api.js'
-import { conversations, clearConversation } from '../conversations.js'
+import { conversations, clearConversation, setConversation } from '../conversations.js'
 import { auditLog } from '../audit.js'
 // ★ sendAdminNotification تم إزالته — إجراءات المشرف لا توصل إشعارات لبقية المشرفين
 
@@ -193,7 +193,7 @@ export function registerTextHandler(bot: Telegraf<any>) {
     }
 
     // ---------------------------------------------------------------
-    // ترقية مشرف (promote) — ★ يطلب صلاحية مالك
+    // ترقية مشرف (promote) — ★ يطلب صلاحية مالك + تأكيد ثانوي
     // ---------------------------------------------------------------
     if (conv.type === 'promote') {
       // ★ DEFENSE IN DEPTH: إعادة التحقق من صلاحية المالك
@@ -215,20 +215,24 @@ export function registerTextHandler(bot: Telegraf<any>) {
             `ℹ️ هذا المشرف بالفعل مالك 👑\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}`
           )
         }
-        await db.botAdmin.update({ where: { chatId: target }, data: { role: 'super' } })
-        await refreshAdminCache()
 
-        // ★ AUDIT: تسجيل ترقية مشرف
-        auditLog({
-          action: 'promote',
-          actorId: cid,
-          targetType: 'admin',
-          targetId: target,
-          details: { name: existing.name, fromRole: 'admin', toRole: 'super' },
+        // ★ SECURITY: تأكيد ثانوي قبل الترقية — منع التنفيذ العرضي أو المُخترق
+        // نحفظ بيانات الهدف في المحادثة ونعرض أزرار تأكيد/إلغاء
+        setConversation(cid, {
+          type: 'promote_confirm',
+          targetChatId: target,
+          targetName: existing.name || undefined,
+          timeout: setTimeout(() => clearConversation(cid), 60_000),
         })
 
-        return sendKeyboard(ctx,
-          `👑 <b>تمت ترقية المشرف إلى مالك!</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}\n\n✅ الآن لديه صلاحيات كاملة`
+        return ctx.replyWithHTML(
+          `⚠️ <b>تأكيد الترقية</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}\n\n👑 سيتم ترقيته إلى <b>مالك</b> بصلاحيات كاملة.\n\n❓ هل أنت متأكد؟`,
+          Markup.inlineKeyboard([
+            [
+              Markup.button.callback('✅ تأكيد الترقية', `promote_confirm_${target}`),
+              Markup.button.callback('❌ إلغاء', `promote_cancel_${target}`),
+            ],
+          ]),
         )
       } catch (err: any) {
         const msg = err?.message || 'Unknown error'
@@ -238,7 +242,7 @@ export function registerTextHandler(bot: Telegraf<any>) {
     }
 
     // ---------------------------------------------------------------
-    // تخفيض مشرف (demote) — ★ يطلب صلاحية مالك
+    // تخفيض مشرف (demote) — ★ يطلب صلاحية مالك + تأكيد ثانوي
     // ---------------------------------------------------------------
     if (conv.type === 'demote') {
       // ★ DEFENSE IN DEPTH: إعادة التحقق من صلاحية المالك
@@ -260,20 +264,23 @@ export function registerTextHandler(bot: Telegraf<any>) {
             `ℹ️ هذا المشرف بالفعل مشرف عادي 🛠\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}`
           )
         }
-        await db.botAdmin.update({ where: { chatId: target }, data: { role: 'admin' } })
-        await refreshAdminCache()
 
-        // ★ AUDIT: تسجيل تخفيض مشرف
-        auditLog({
-          action: 'demote',
-          actorId: cid,
-          targetType: 'admin',
-          targetId: target,
-          details: { name: existing.name, fromRole: 'super', toRole: 'admin' },
+        // ★ SECURITY: تأكيد ثانوي قبل التخفيض — منع التنفيذ العرضي أو المُخترق
+        setConversation(cid, {
+          type: 'demote_confirm',
+          targetChatId: target,
+          targetName: existing.name || undefined,
+          timeout: setTimeout(() => clearConversation(cid), 60_000),
         })
 
-        return sendKeyboard(ctx,
-          `🛠 <b>تم تخفيض المالك إلى مشرف عادي</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}\n\n🔒 لن يتمكن من إضافة/حذف مشرفين`
+        return ctx.replyWithHTML(
+          `⚠️ <b>تأكيد التخفيض</b>\n\n🔢 <code>${escapeCode(target)}</code>\n👤 ${existing.name ? sanitize(existing.name) : 'بدون اسم'}\n\n🛠 سيتم تخفيضه إلى <b>مشرف عادي</b>.\n🔒 لن يتمكن من إضافة/حذف/ترقية مشرفين.\n\n❓ هل أنت متأكد؟`,
+          Markup.inlineKeyboard([
+            [
+              Markup.button.callback('✅ تأكيد التخفيض', `demote_confirm_${target}`),
+              Markup.button.callback('❌ إلغاء', `demote_cancel_${target}`),
+            ],
+          ]),
         )
       } catch (err: any) {
         const msg = err?.message || 'Unknown error'
