@@ -6,7 +6,7 @@
 import { Telegraf, Markup } from 'telegraf'
 import { db } from '../database.js'
 import { isValidOrderId, sanitize, escapeCode, formatDate, formatAmount, getText, log } from '../helpers.js'
-import { ORDER_STATUS_AR, PAYMENT_STATUS_AR } from '../constants.js'
+import { ORDER_STATUS_AR, PAYMENT_STATUS_AR, getPaymentMethodLabel } from '../constants.js'
 import { getEffectiveChatId, sendKeyboard } from '../admin.js'
 import { orderActionKeyboard } from '../keyboards.js'
 import { callStoreOrderApi } from '../store-api.js'
@@ -234,8 +234,10 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
 
       let paymentInfo = `💳 الدفع: ${payStatusLabel}`
       if (order.localPayment) {
-        const methodName = getText(order.localPayment.method?.name, order.paymentMethod || 'محلي')
-        paymentInfo = `💳 الدفع: ${methodName} — ${payStatusLabel}`
+        const localMethodName = getText(order.localPayment.method?.name)
+        const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
+        const displayMethod = localMethodName !== '—' ? localMethodName : gatewayLabel
+        paymentInfo = `💳 الدفع: ${displayMethod} — ${payStatusLabel}`
         if (order.localPayment.receiptUrl) paymentInfo += `\n🖼 الإيصال: <a href="${order.localPayment.receiptUrl}">عرض الصورة</a>`
         if (order.localPayment.fieldValues && typeof order.localPayment.fieldValues === 'object') {
           const fvMeta = (order.localPayment.fieldValues as any)._meta as Record<string, any> | undefined
@@ -247,7 +249,8 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
           }
         }
       } else if (order.payment?.transactionId) {
-        paymentInfo = `💳 الدفع: Stripe — ${payStatusLabel}\n🔢 المعاملة: <code>${order.payment.transactionId}</code>`
+        const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
+        paymentInfo = `💳 الدفع: ${gatewayLabel} — ${payStatusLabel}\n🔢 المعاملة: <code>${escapeCode(order.payment.transactionId)}</code>`
       }
 
       const msg = [
@@ -447,8 +450,10 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
 
       let paymentInfo = `💳 الدفع: ${payStatusLabel}`
       if (order.localPayment) {
-        const methodName = getText(order.localPayment.method?.name, order.paymentMethod || 'محلي')
-        paymentInfo = `💳 الدفع: ${methodName} — ${payStatusLabel}`
+        const localMethodName = getText(order.localPayment.method?.name)
+        const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
+        const displayMethod = localMethodName !== '—' ? localMethodName : gatewayLabel
+        paymentInfo = `💳 الدفع: ${displayMethod} — ${payStatusLabel}`
         if (order.localPayment.receiptUrl) paymentInfo += `\n🖼 الإيصال: <a href="${order.localPayment.receiptUrl}">عرض الصورة</a>`
         if (order.localPayment.reviewNotes) paymentInfo += `\n📝 ملاحظات: ${sanitize(order.localPayment.reviewNotes)}`
         if (order.localPayment.fieldValues && typeof order.localPayment.fieldValues === 'object') {
@@ -461,7 +466,8 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
           }
         }
       } else if (order.payment?.transactionId) {
-        paymentInfo = `💳 الدفع: Stripe — ${payStatusLabel}\n🔢 المعاملة: <code>${escapeCode(order.payment.transactionId)}</code>`
+        const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
+        paymentInfo = `💳 الدفع: ${gatewayLabel} — ${payStatusLabel}\n🔢 المعاملة: <code>${escapeCode(order.payment.transactionId)}</code>`
       }
 
       return ctx.replyWithHTML(`

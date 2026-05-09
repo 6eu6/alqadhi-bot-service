@@ -6,7 +6,7 @@
 import { Telegraf } from 'telegraf'
 import { db } from './database.js'
 import { sanitize, escapeCode, formatDate, formatAmount, getText, log, getStoreName } from './helpers.js'
-import { EVENT_META, WEBHOOK_EVENT_META, OrderEvent, WebhookEvent } from './constants.js'
+import { EVENT_META, WEBHOOK_EVENT_META, OrderEvent, WebhookEvent, getPaymentMethodLabel } from './constants.js'
 import { adminCache, superAdminCache } from './admin.js'
 import { buildNotificationButtons, buildWebhookNotificationButtons } from './keyboards.js'
 import { SUPER_ADMIN_CHAT_ID } from './config.js'
@@ -58,7 +58,7 @@ export async function sendAdminNotification(
     const meta = EVENT_META[event]
     if (!meta) return
 
-    const paymentMethod = order.paymentMethod || 'غير محدد'
+    const paymentMethod = order.paymentMethod ? getPaymentMethodLabel(order.paymentMethod) : '💳 غير محدد'
 
     // Fetch store name from settings for dynamic branding
     const storeName = await getStoreName()
@@ -197,11 +197,14 @@ export async function sendWebhookOrderNotification(
       return line
     }).join('\n')
 
-    // Build payment info
+    // Build payment info — with precise Arabic payment method names
     let paymentInfo = ''
     if (event === 'receipt_uploaded' && order.localPayment) {
-      const methodName = getText(order.localPayment.method?.name, order.paymentMethod || 'محلي')
-      paymentInfo = `💳 الدفع: ${methodName} — ⏳ بانتظار المراجعة`
+      const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
+      const localMethodName = getText(order.localPayment.method?.name)
+      // ★ طريقة الدفع المحلية أولوية — اسمها الدقيق من قاعدة البيانات
+      const displayMethod = localMethodName !== '—' ? localMethodName : gatewayLabel
+      paymentInfo = `💳 الدفع: ${displayMethod} — ⏳ بانتظار المراجعة`
       // ★ عرض كود الإيصال/المرجع كنص فقط (بدون رابط صورة)
       // fieldValues تحتوي على كود الإيصال ورقم الحوالة وغيرها
       if (order.localPayment.fieldValues && typeof order.localPayment.fieldValues === 'object') {
@@ -214,8 +217,8 @@ export async function sendWebhookOrderNotification(
         }
       }
     } else if (event === 'payment_confirmed') {
-      const gatewayName = order.paymentMethod || 'بوابة الدفع'
-      paymentInfo = `💳 الدفع: ${sanitize(gatewayName)} — ✅ مدفوع ومؤكد`
+      const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
+      paymentInfo = `💳 الدفع: ${gatewayLabel} — ✅ مدفوع ومؤكد`
       if (order.payment?.transactionId) {
         paymentInfo += `\n🔢 المعاملة: <code>${escapeCode(order.payment.transactionId)}</code>`
       }

@@ -1,13 +1,36 @@
 /**
  * AlQadi Store — Slash Command Handlers
- * Handlers for /start, /help, /orders, /stats, /admins, /settings, etc.
+ * Handlers for /start, /help, /orders, /stats, /admins, /settings, /testnotify, etc.
  */
 
 import { Telegraf } from 'telegraf'
-import { sanitize, getStoreName } from '../helpers.js'
+import { sanitize, getStoreName, log } from '../helpers.js'
 import { isSuperAdmin, sendKeyboard } from '../admin.js'
+import { sendWebhookOrderNotification } from '../notifications.js'
 
 export function registerCommandHandlers(bot: Telegraf<any>) {
+
+  // ─── /testnotify — إرسال إشعار تجريبي للتحقق من عمل الإشعارات ─────────
+  bot.command('testnotify', async (ctx) => {
+    const chatId = ctx.chat?.id
+    if (!chatId) return
+
+    try {
+      await ctx.reply('🔔 جاري إرسال إشعار تجريبي...')
+
+      // إرسال رسالة تجريبية مباشرة
+      await bot.telegram.sendMessage(
+        String(chatId),
+        `🔔 <b>إشعار تجريبي — النظام يعمل!</b>\n\n✅ تم إرسال هذا الإشعار بنجاح\n📡 البوت متصل ويعمل\n⏰ ${new Date().toISOString()}\n\n💡 إذا وصلك هذا الإشعار، فنظام الإشعارات يعمل بشكل صحيح.`,
+        { parse_mode: 'HTML' }
+      )
+
+      log('testnotify', `Test notification sent to chat ${chatId}`)
+    } catch (err: any) {
+      log('testnotify', `ERROR: ${err?.message}`, err)
+      await ctx.reply(`❌ فشل إرسال الإشعار التجريبي: ${err?.message || 'خطأ غير معروف'}`)
+    }
+  })
 
   bot.start(async (ctx) => {
     const firstName = ctx.from?.first_name || ''

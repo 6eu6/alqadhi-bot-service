@@ -24,6 +24,22 @@ export const PAYMENT_STATUS_AR: Record<string, string> = {
   REJECTED: '🚫 مرفوض',
 }
 
+// Payment method display names — Arabic labels for gateway codes
+// Maps Order.paymentMethod values to user-friendly Arabic names
+export const PAYMENT_METHOD_LABELS: Record<string, string> = {
+  STRIPE:  '💳 الدفع الإلكتروني (Stripe)',
+  MOYASAR: '💳 مدى / Apple Pay / STC Pay (Moyasar)',
+  PAYTABS: '💳 KNET / Benefit / بطاقات خليجية (PayTabs)',
+  PAYPAL:  '💳 PayPal',
+  LOCAL:   '🏦 دفع محلي',
+}
+
+/** Get the Arabic display label for a payment method code */
+export function getPaymentMethodLabel(code: string | null | undefined): string {
+  if (!code) return '💳 غير محدد'
+  return PAYMENT_METHOD_LABELS[code.toUpperCase()] || code
+}
+
 // Order event types for notifications
 // ⚠️ SYNC: Must match BOT_CUSTOMER_EVENTS in al-qadhi-store/src/lib/notification-constants.ts
 // Current store values: payment_approved | payment_rejected | order_processing | order_completed | order_cancelled
