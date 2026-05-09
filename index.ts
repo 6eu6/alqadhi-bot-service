@@ -9,18 +9,20 @@
  * UI: ReplyKeyboardMarkup (fixed keyboard) + inline action buttons
  *
  * Features:
+ *  - Automatic push notifications when payment is confirmed (Stripe/gateway)
+ *  - Automatic push notifications when receipt is uploaded (local payment)
  *  - Payment approve/reject with stock management
  *  - Shipment tracking with idempotent stock decrement
  *  - Multi-step conversation flows (reject reason, admin management)
  *  - Reply keyboard with admin action buttons
- *  - Inline Telegram notifications to admin chat
+ *  - Webhook endpoint for store → bot push notifications
  *  - Comprehensive error handling and process stability
  */
 
 import { readFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createServer } from 'node:http'
+import { createServer, IncomingMessage, ServerResponse } from 'node:http'
 
 // ESM-compatible __dirname polyfill
 const __filename = fileURLToPath(import.meta.url)
@@ -42,6 +44,7 @@ const BOT_REQUIRED_KEYS = new Set([
   'SUPABASE_DIRECT_URL',
   'INTERNAL_API_SECRET',
   'API_BASE_URL',
+  'BOT_WEBHOOK_SECRET',
   'NODE_ENV',
 ])
 
@@ -75,6 +78,9 @@ const SUPER_ADMIN_CHAT_ID = process.env.TELEGRAM_ADMIN_CHAT_ID
 const SERVICE_PORT = parseInt(process.env.PORT || '3099', 10)
 const INTERNAL_SECRET = process.env.INTERNAL_API_SECRET
 const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:3000'
+// Secret for authenticating webhook calls from the store
+// Falls back to INTERNAL_API_SECRET for simplicity (same secret used both ways)
+const WEBHOOK_SECRET = process.env.BOT_WEBHOOK_SECRET || INTERNAL_SECRET
 
 if (!BOT_TOKEN) {
   console.error('[FATAL] TELEGRAM_BOT_TOKEN is not configured')
@@ -120,6 +126,16 @@ const db = new PrismaClient({
 const CUID_RE = /^c[a-z0-9]{8,30}$/
 function isValidOrderId(id: string): boolean {
   return CUID_RE.test(id)
+}
+
+/** Timing-safe string comparison to prevent timing attacks */
+function safeCompare(a: string, b: string): boolean {
+  if (a.length !== b.length) return false
+  let result = 0
+  for (let i = 0; i < a.length; i++) {
+    result |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  }
+  return result === 0
 }
 
 /** Sanitize text to prevent HTML injection in Telegram messages */
@@ -225,6 +241,14 @@ const EVENT_META: Record<OrderEvent, { emoji: string; label: string }> = {
   order_cancelled:   { emoji: '🚫', label: 'تم إلغاء الطلب' },
 }
 
+// Webhook event types (from store → bot)
+type WebhookEvent = 'payment_confirmed' | 'receipt_uploaded'
+
+const WEBHOOK_EVENT_META: Record<WebhookEvent, { emoji: string; label: string }> = {
+  payment_confirmed: { emoji: '💰', label: 'طلب جديد — تم تأكيد الدفع' },
+  receipt_uploaded:  { emoji: '📨', label: 'إيصال دفع جديد — بانتظار المراجعة' },
+}
+
 // Reply keyboard button labels
 const KB = {
   ORDERS: '📬 الطلبات المعلقة',
@@ -262,7 +286,7 @@ function orderActionKeyboard(orderId: string, paymentStatus?: string, paymentMet
   if (paymentStatus === 'PENDING' && !isStripe) {
     buttons.push([
       Markup.button.callback('✅ تأكيد الاستلام', `pay_approve_${orderId}`),
-      Markup.button.callback('❌ رفض الدفع', `pay_reject_${orderId}`),
+      Markup.button.callback('❌ رفع الدفع', `pay_reject_${orderId}`),
     ])
   } else if (paymentStatus === 'PENDING' && isStripe) {
     buttons.push([
@@ -310,6 +334,45 @@ function buildNotificationButtons(
         { text: '⏳ بانتظار تأكيد Stripe تلقائياً', callback_data: `noop_stripe_${orderId}` },
       ])
     }
+    buttons.push([
+      { text: '📦 جاري الشحن', callback_data: `ship_start_${orderId}` },
+      { text: '🎉 تم الشحن', callback_data: `ship_done_${orderId}` },
+    ])
+  }
+
+  // Details button always
+  buttons.push([{ text: '📋 التفاصيل', callback_data: `order_details_${orderId}` }])
+
+  return buttons
+}
+
+/**
+ * Build inline keyboard for webhook-triggered notifications.
+ * These are new order notifications that arrive from the store.
+ *
+ * For `payment_confirmed` (Stripe/gateway auto-confirmed):
+ *   → Show ship + done + details buttons
+ *
+ * For `receipt_uploaded` (local payment awaiting review):
+ *   → Show approve + reject + details buttons
+ */
+function buildWebhookNotificationButtons(
+  orderId: string,
+  event: WebhookEvent,
+  paymentMethod?: string | null,
+): any[][] {
+  const buttons: any[][] = []
+
+  if (event === 'receipt_uploaded') {
+    // Local payment — admin needs to approve/reject the receipt
+    buttons.push([
+      { text: '✅ تأكيد الاستلام', callback_data: `pay_approve_${orderId}` },
+      { text: '❌ رفض الدفع', callback_data: `pay_reject_${orderId}` },
+    ])
+  }
+
+  // For confirmed payments, show ship/done buttons
+  if (event === 'payment_confirmed') {
     buttons.push([
       { text: '📦 جاري الشحن', callback_data: `ship_start_${orderId}` },
       { text: '🎉 تم الشحن', callback_data: `ship_done_${orderId}` },
@@ -492,6 +555,7 @@ async function callStoreOrderApi(
 /**
  * Send an inline Telegram notification to the admin chat about an order event.
  * Uses bot.telegram.sendMessage() directly.
+ * Used for admin-initiated action confirmations (approve, reject, ship, complete).
  */
 async function sendAdminNotification(
   order: {
@@ -563,6 +627,149 @@ async function sendAdminNotification(
     }
   } catch (err) {
     log('notify', 'ERROR Failed to build admin notification:', err)
+  }
+}
+
+/**
+ * Send a detailed order notification to all admins — triggered by webhook from the store.
+ * This is the PRIMARY notification mechanism for new orders.
+ *
+ * Two event types:
+ *   - `payment_confirmed`: Stripe/gateway auto-confirmed → show ship/done buttons
+ *   - `receipt_uploaded`: Customer uploaded receipt → show approve/reject buttons
+ *
+ * This function fetches the order from DB with full details (items, payment, etc.)
+ * and sends a rich notification to every active admin.
+ */
+async function sendWebhookOrderNotification(
+  orderId: string,
+  event: WebhookEvent,
+): Promise<void> {
+  try {
+    const meta = WEBHOOK_EVENT_META[event]
+    if (!meta) {
+      log('webhook-notify', `ERROR Unknown webhook event: ${event}`)
+      return
+    }
+
+    // Fetch full order details from DB
+    const order = await db.order.findUnique({
+      where: { id: orderId },
+      include: {
+        user: { select: { name: true, email: true, phone: true, country: true } },
+        items: { include: { service: { select: { name: true } }, price: { select: { name: true } } } },
+        payment: { select: { status: true, method: true, transactionId: true } },
+        localPayment: {
+          select: {
+            status: true,
+            receiptUrl: true,
+            fieldValues: true,
+            method: { select: { name: true, type: true } },
+          },
+        },
+      },
+    })
+
+    if (!order) {
+      log('webhook-notify', `ERROR Order not found: ${orderId}`)
+      return
+    }
+
+    const storeName = await getStoreName()
+
+    // Build items list
+    const itemsList = order.items.map((item: any) => {
+      const svcName = getText(item.service?.name)
+      let line = `  • ${sanitize(svcName)} × ${item.quantity}`
+      if (item.inputData && typeof item.inputData === 'object') {
+        const inputDataMeta = item.inputData._meta as Record<string, any> | undefined
+        const fieldLabels = inputDataMeta?.fieldLabels as Record<string, string> | undefined
+        for (const [key, val] of Object.entries(item.inputData as Record<string, any>)) {
+          if (key === '_meta' || !val) continue
+          const label = fieldLabels?.[key] || key
+          line += `\n    ${sanitize(label)}: ${sanitize(String(val))}`
+        }
+      }
+      return line
+    }).join('\n')
+
+    // Build payment info
+    let paymentInfo = ''
+    if (event === 'receipt_uploaded' && order.localPayment) {
+      const methodName = getText(order.localPayment.method?.name, order.paymentMethod || 'محلي')
+      paymentInfo = `💳 الدفع: ${methodName} — ⏳ بانتظار المراجعة`
+      if (order.localPayment.receiptUrl) {
+        paymentInfo += `\n🖼 الإيصال: <a href="${order.localPayment.receiptUrl}">عرض الصورة</a>`
+      }
+      if (order.localPayment.fieldValues && typeof order.localPayment.fieldValues === 'object') {
+        const fvMeta = (order.localPayment.fieldValues as any)._meta as Record<string, any> | undefined
+        const fvLabels = fvMeta?.fieldLabels as Record<string, string> | undefined
+        for (const [key, val] of Object.entries(order.localPayment.fieldValues as Record<string, any>)) {
+          if (key === '_meta' || !val) continue
+          const label = fvLabels?.[key] || key
+          paymentInfo += `\n    ${sanitize(label)}: ${sanitize(String(val))}`
+        }
+      }
+    } else if (event === 'payment_confirmed') {
+      const gatewayName = order.paymentMethod || 'بوابة الدفع'
+      paymentInfo = `💳 الدفع: ${sanitize(gatewayName)} — ✅ مدفوع ومؤكد`
+      if (order.payment?.transactionId) {
+        paymentInfo += `\n🔢 المعاملة: <code>${escapeCode(order.payment.transactionId)}</code>`
+      }
+    }
+
+    // Build full message
+    const lines: string[] = [
+      `${meta.emoji} ${meta.label} — ${sanitize(storeName)}`,
+      ``,
+      `📋 الطلب: <code>${escapeCode(order.orderNumber)}</code>`,
+      `👤 العميل: ${sanitize(order.user.name)}`,
+      `📧 البريد: ${sanitize(order.user.email)}`,
+    ]
+
+    if (order.user.phone) {
+      lines.push(`📱 الهاتف: ${sanitize(order.user.phone)}`)
+    }
+
+    lines.push('')
+    lines.push(`─────────────`)
+    lines.push(`🛍 <b>الخدمات:</b>`)
+    lines.push(itemsList)
+    lines.push('')
+    lines.push(`─────────────`)
+    lines.push(paymentInfo)
+    lines.push('')
+    lines.push(`💰 المبلغ: <b>${formatAmount(order.total, order.currency)}</b>`)
+    lines.push(`⏰ ${formatDate(order.createdAt)}`)
+
+    const message = lines.join('\n')
+
+    // Build inline keyboard with appropriate action buttons
+    const extra: any = {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: buildWebhookNotificationButtons(order.id, event, order.paymentMethod),
+      },
+    }
+
+    // Send to ALL active admins
+    const targetChatIds = adminCache.size > 0
+      ? Array.from(adminCache)
+      : [String(SUPER_ADMIN_CHAT_ID)]
+
+    let sentCount = 0
+    for (const chatId of targetChatIds) {
+      try {
+        await bot.telegram.sendMessage(chatId, message, extra)
+        sentCount++
+      } catch (err) {
+        log('webhook-notify', `ERROR Failed to send to ${chatId}:`, err)
+      }
+    }
+
+    log('webhook-notify', `Sent ${event} notification for order ${order.orderNumber} to ${sentCount}/${targetChatIds.length} admins`)
+  } catch (err) {
+    log('webhook-notify', `ERROR Failed to send webhook notification for order ${orderId}:`, err)
   }
 }
 
@@ -825,6 +1032,7 @@ bot.hears(KB.SETTINGS, async (ctx) => {
       ['✅ الحالة', '🟢 متصل'],
       ['💾 قاعدة البيانات', '🔗 Supabase (PostgreSQL)'],
       ['🔗 مرتبط بـ', '🌐 خدمة مستقلة (Standalone)'],
+      ['🔔 إشعارات تلقائية', WEBHOOK_SECRET ? '🟢 مفعلة' : '🔴 غير مفعلة'],
       ['📅 وقت التشغيل', formatDate(new Date())],
     ]
     const settingsText = settings.map(([label, value]) => `${label}: ${value}`).join('\n')
@@ -866,6 +1074,11 @@ bot.hears(KB.HELP, async (ctx) => {
 ─────────────
 
 ⚡ <b>إدارة الطلبات:</b>
+
+🔔 <b>إشعارات تلقائية:</b>
+يصلك إشعار فوري عند:
+• تأكيد الدفع الإلكتروني (Stripe وغيرها)
+• رفع إيصال دفع محلي يحتاج مراجعة
 
 من أزرار الطلب يمكنك:
 ✅ تأكيد — تأكيد استلام الدفع (مع إنقاص المخزون)
@@ -1661,6 +1874,8 @@ bot.start(async (ctx) => {
 ⚙️ الإعدادات
 📖 الدليل
 
+🔔 <b>إشعارات تلقائية:</b> يصلك إشعار فوري عند تأكيد الدفع أو رفع إيصال
+
 🔒 للوصول: المشرفون فقط
   `.trim())
 })
@@ -1705,7 +1920,7 @@ process.on('uncaughtException', (err) => {
 })
 
 // =============================================================================
-// §15 HEALTH CHECK SERVER
+// §15 HTTP SERVER — Health Check + Webhook Endpoint
 // =============================================================================
 
 /** آخر فحص لاتصال تلغرام — يُحدّث كل 60 ثانية */
@@ -1727,13 +1942,35 @@ async function checkTelegramConnection(): Promise<{ ok: boolean; botUsername: st
   }
 }
 
+/**
+ * Read the full request body as a string.
+ * Helper for webhook endpoint (raw body parsing).
+ */
+function readRequestBody(req: IncomingMessage): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
+    req.on('error', reject)
+  })
+}
+
+/**
+ * Send a JSON response.
+ */
+function sendJson(res: ServerResponse, statusCode: number, data: any) {
+  res.writeHead(statusCode, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(data))
+}
+
 const server = createServer(async (req, res) => {
-  // Extract pathname only (ignore query strings like /health?foo=bar)
   const pathname = req.url?.split('?')[0] || ''
-  if (pathname === '/health') {
+  const method = req.method?.toUpperCase() || ''
+
+  // ─── Health Check ────────────────────────────────────────────────────────
+  if (pathname === '/health' && method === 'GET') {
     const telegram = await checkTelegramConnection()
-    res.writeHead(200, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({
+    return sendJson(res, 200, {
       status: telegram.ok ? 'ok' : 'degraded',
       service: 'alqadhi-bot-service',
       telegram: {
@@ -1743,13 +1980,77 @@ const server = createServer(async (req, res) => {
       admins: adminCache.size,
       superAdmins: superAdminCache.size,
       conversations: conversations.size,
+      webhookEnabled: !!WEBHOOK_SECRET,
       timestamp: new Date().toISOString(),
       uptime: process.uptime(),
-    }))
-  } else {
-    res.writeHead(404, { 'Content-Type': 'application/json' })
-    res.end(JSON.stringify({ error: 'Not found' }))
+    })
   }
+
+  // ─── Webhook: Store → Bot (order notifications) ─────────────────────────
+  // POST /webhook/orders
+  // Body: { event: 'payment_confirmed' | 'receipt_uploaded', orderId: string }
+  // Auth: X-Webhook-Secret header (must match BOT_WEBHOOK_SECRET or INTERNAL_API_SECRET)
+  if (pathname === '/webhook/orders' && method === 'POST') {
+    try {
+      // 1. Authenticate
+      const secret = req.headers['x-webhook-secret'] as string | undefined
+      if (!WEBHOOK_SECRET) {
+        log('webhook', 'ERROR No WEBHOOK_SECRET configured — rejecting webhook')
+        return sendJson(res, 503, { error: 'Webhook not configured' })
+      }
+      if (!secret || !safeCompare(secret, WEBHOOK_SECRET)) {
+        log('webhook', 'WARN Invalid or missing webhook secret')
+        return sendJson(res, 401, { error: 'Unauthorized' })
+      }
+
+      // 2. Parse body
+      const bodyStr = await readRequestBody(req)
+      let body: any
+      try {
+        body = JSON.parse(bodyStr)
+      } catch {
+        return sendJson(res, 400, { error: 'Invalid JSON body' })
+      }
+
+      const { event, orderId } = body
+
+      // 3. Validate
+      if (!event || !orderId) {
+        return sendJson(res, 400, { error: 'Missing required fields: event, orderId' })
+      }
+
+      const validEvents: WebhookEvent[] = ['payment_confirmed', 'receipt_uploaded']
+      if (!validEvents.includes(event)) {
+        return sendJson(res, 400, { error: `Invalid event. Must be one of: ${validEvents.join(', ')}` })
+      }
+
+      if (!isValidOrderId(orderId)) {
+        return sendJson(res, 400, { error: 'Invalid orderId format' })
+      }
+
+      log('webhook', `Received ${event} for order ${orderId}`)
+
+      // 4. Process asynchronously — send notification to all admins
+      // We respond immediately so the store doesn't block, then process
+      sendWebhookOrderNotification(orderId, event).catch((err) => {
+        log('webhook', `ERROR processing ${event} for ${orderId}:`, err)
+      })
+
+      // Respond immediately — notification is fire-and-forget
+      return sendJson(res, 200, {
+        received: true,
+        event,
+        orderId,
+        message: 'Notification will be sent to all admins',
+      })
+    } catch (err: any) {
+      log('webhook', `ERROR webhook handler: ${err?.message}`, err)
+      return sendJson(res, 500, { error: 'Internal server error' })
+    }
+  }
+
+  // ─── 404 ────────────────────────────────────────────────────────────────
+  sendJson(res, 404, { error: 'Not found' })
 })
 
 // =============================================================================
@@ -1757,9 +2058,15 @@ const server = createServer(async (req, res) => {
 // =============================================================================
 
 async function main() {
-  // Start health check server
+  // Start health check + webhook server
   server.listen(SERVICE_PORT, () => {
-    log('health', `Health check server running on port ${SERVICE_PORT}`)
+    log('health', `Server running on port ${SERVICE_PORT}`)
+    log('health', `Endpoints: GET /health, POST /webhook/orders`)
+    if (WEBHOOK_SECRET) {
+      log('health', `Webhook authentication: enabled`)
+    } else {
+      log('health', `WARN Webhook authentication: DISABLED (no BOT_WEBHOOK_SECRET or INTERNAL_API_SECRET)`)
+    }
   })
 
   // Test database connection
@@ -1792,6 +2099,7 @@ async function main() {
   log('bot', '✅ AlQadi Store bot is running')
   log('bot', `👑 Super Admin: ${SUPER_ADMIN_CHAT_ID}`)
   log('bot', `👥 Total Admins: ${adminCache.size}`)
+  log('bot', `🔔 Webhook: ${WEBHOOK_SECRET ? 'enabled' : 'disabled'}`)
   log('bot', '📡 Polling updates...')
 
   // Graceful shutdown
