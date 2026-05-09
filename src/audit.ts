@@ -12,6 +12,7 @@
 
 import { db } from './database.js'
 import { log } from './helpers.js'
+import type { Prisma } from '@prisma/client'
 
 export type AuditAction =
   | 'approve_payment'
@@ -47,7 +48,7 @@ export function auditLog(entry: AuditEntry): void {
       actorType: 'bot_admin',
       targetType: entry.targetType || null,
       targetId: entry.targetId || null,
-      details: entry.details || undefined,
+      details: (entry.details ?? undefined) as Prisma.InputJsonValue | undefined,
     },
   }).then(() => {
     log('audit', `${entry.action} by ${entry.actorId} on ${entry.targetType}:${entry.targetId}`)
@@ -69,7 +70,7 @@ export async function auditLogSync(entry: AuditEntry): Promise<void> {
         actorType: 'bot_admin',
         targetType: entry.targetType || null,
         targetId: entry.targetId || null,
-        details: entry.details || undefined,
+        details: (entry.details ?? undefined) as Prisma.InputJsonValue | undefined,
       },
     })
     log('audit', `${entry.action} by ${entry.actorId} on ${entry.targetType}:${entry.targetId}`)
