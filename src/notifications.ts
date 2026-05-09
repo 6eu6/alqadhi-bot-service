@@ -40,7 +40,9 @@ export async function sendAdminNotification(
     orderNumber: string
     user: { name: string; email: string; phone?: string | null; country?: string | null }
     total: any
+    totalUSD?: any
     currency: string
+    exchangeRate?: any
     paymentMethod?: string | null
     paymentStatus?: string | null
   },
@@ -75,7 +77,18 @@ export async function sendAdminNotification(
 
     lines.push('')
     lines.push(`─────────────`)
-    lines.push(`💰 المبلغ: <b>${formatAmount(Number(order.total), order.currency)}</b>`)
+    // ★ عرض المبلغ بالعملة المحلية + الدولار
+    if (order.currency !== 'USD') {
+      lines.push(`💰 المبلغ: <b>${formatAmount(Number(order.total), order.currency)}</b>`)
+      if (order.totalUSD) {
+        lines.push(`💵 بالدولار: ${formatAmount(Number(order.totalUSD), 'USD')}`)
+      }
+    } else {
+      lines.push(`💰 المبلغ: <b>${formatAmount(Number(order.total), 'USD')}</b>`)
+    }
+    if (order.exchangeRate) {
+      lines.push(`💱 سعر الصرف: ${Number(order.exchangeRate).toFixed(4)}`)
+    }
     lines.push(`💳 الدفع: ${sanitize(paymentMethod)}`)
 
     if (extraNotes && extraNotes.trim().length > 0) {
@@ -229,7 +242,16 @@ export async function sendWebhookOrderNotification(
     lines.push(`─────────────`)
     lines.push(paymentInfo)
     lines.push('')
-    lines.push(`💰 المبلغ: <b>${formatAmount(order.total, order.currency)}</b>`)
+    // ★ عرض المبلغ بالعملة المحلية + الدولار
+    if (order.currency !== 'USD') {
+      lines.push(`💰 المبلغ: <b>${formatAmount(order.total, order.currency)}</b>`)
+      lines.push(`💵 بالدولار: ${formatAmount(order.totalUSD, 'USD')}`)
+    } else {
+      lines.push(`💰 المبلغ: <b>${formatAmount(order.total, 'USD')}</b>`)
+    }
+    if (order.exchangeRate) {
+      lines.push(`💱 سعر الصرف: ${Number(order.exchangeRate).toFixed(4)}`)
+    }
     lines.push(`⏰ ${formatDate(order.createdAt)}`)
 
     const message = lines.join('\n')
