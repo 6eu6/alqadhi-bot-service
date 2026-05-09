@@ -16,6 +16,7 @@ RUN bunx prisma generate
 
 # Copy source code (only the bot files, not skills/upload/etc.)
 COPY index.ts start.mjs tsconfig.json ./
+COPY src/ ./src/
 
 # Health check endpoint
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
