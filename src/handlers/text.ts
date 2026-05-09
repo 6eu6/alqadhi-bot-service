@@ -10,7 +10,7 @@ import { SUPER_ADMIN_CHAT_ID } from '../config.js'
 import { isSuperAdmin, refreshAdminCache, sendKeyboard } from '../admin.js'
 import { callStoreOrderApi } from '../store-api.js'
 import { conversations, clearConversation } from '../conversations.js'
-import { sendAdminNotification } from '../notifications.js'
+// ★ sendAdminNotification تم إزالته — إجراءات المشرف لا توصل إشعارات لبقية المشرفين
 
 export function registerTextHandler(bot: Telegraf<any>) {
   bot.on('text', async (ctx, next) => {
@@ -65,9 +65,8 @@ export function registerTextHandler(bot: Telegraf<any>) {
           return sendKeyboard(ctx, `⚠️ خطأ في رفض الطلب\n\n${errMsg}`)
         }
 
-        // ★ إرسال إشعار للمشرفين الآخرين فقط — استثناء المشرف الفعّال
-        // المشرف الفعّال شاف النتيجة عبر sendKeyboard() مباشرة
-        await sendAdminNotification(orderSnapshot, 'payment_rejected', text, cid)
+        // ★ لا إشعار للمشرفين الآخرين — المشرف الفعّال شاف النتيجة عبر sendKeyboard()
+        // المشرفين الآخرين يقدرون يضغطون أي زر في رسالتهم ويشوفون الحالة الحالية
 
         return sendKeyboard(ctx,
           `🚫 <b>تم رفض الطلب</b>\n\n📋 <code>${escapeCode(orderSnapshot.orderNumber)}</code>\n👤 العميل: ${sanitize(orderSnapshot.user.name)}\n📝 السبب: ${sanitize(text)}\n\n📧 تم إبلاغ العميل عبر البريد ✉️`

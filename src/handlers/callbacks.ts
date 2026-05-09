@@ -17,7 +17,8 @@ import { getEffectiveChatId, sendKeyboard } from '../admin.js'
 import { orderActionKeyboard, orderActionKeyboardAfterAction } from '../keyboards.js'
 import { callStoreOrderApi } from '../store-api.js'
 import { setConversation, clearConversation } from '../conversations.js'
-import { sendAdminNotification } from '../notifications.js'
+// ★ sendAdminNotification تم إزالته — إجراءات المشرف لا توصل إشعارات لبقية المشرفين
+// كل مشرف يتفاعل مع رسالته فقط، بدون إشعارات متقاطعة
 
 /**
  * ★ Helper: جلب الحالة الحالية للطلب من قاعدة البيانات بعد إجراء
@@ -124,9 +125,9 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         return
       }
 
-      // ★ إرسال إشعار للمشرفين الآخرين — استثناء المشرف الفعّال (شاف النتيجة عبر editMessageText)
-      const actorChatId = String(getEffectiveChatId(ctx))
-      await sendAdminNotification(order, 'payment_approved', undefined, actorChatId)
+      // ★ لا إشعار للمشرفين الآخرين — كل مشرف يتفاعل مع رسالته فقط
+      // المشرف الفعّال شاف النتيجة عبر ctx.editMessageText()
+      // المشرفين الآخرين يقدرون يضغطون أي زر في رسالتهم ويشوفون الحالة الحالية
 
       // ★ تحديث الرسالة مع كيبورد جديد — أزرار الشحن بدل أزرار التأكيد
       await ctx.editMessageText(
@@ -424,9 +425,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
 
       // ★ تحقق: الطلب قيد التنفيذ فعلاً (بعد تأكيد الدفع)
       if (order.status === 'PROCESSING') {
-      // ★ إرسال إشعار للمشرفين الآخرين فقط
-      const actorChatId2 = String(getEffectiveChatId(ctx))
-      await sendAdminNotification(order, 'order_processing', undefined, actorChatId2)
+      // ★ لا إشعار للمشرفين الآخرين
       // ★ حدث الكيبورد — أزل زر جاري الشحن، أبقِ زر تم الشحن
       return ctx.editMessageText(
           `📦 <b>الطلب قيد التنفيذ والشحن</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ⚙️ جاري التنفيذ\n💳 الدفع: ✅ مؤكد\n👤 العميل: ${sanitize(order.user.name)}\n📧✅ تم إرسال إشعار للعميل`,
@@ -479,9 +478,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       // ★ تحقق من قاعدة البيانات أن التغيير تم فعلاً
       const verified = await verifyOrderStatus(orderId)
 
-      // ★ إرسال إشعار للمشرفين الآخرين — استثناء المشرف الفعّال
-      const actorChatId3 = String(getEffectiveChatId(ctx))
-      await sendAdminNotification(order, 'order_processing', undefined, actorChatId3)
+      // ★ لا إشعار للمشرفين الآخرين — كل مشرف يتفاعل مع رسالته فقط
 
       const unpaidWarning = isUnpaid
         ? '\n\n⚠️ <b>تنبيه:</b> الطلب لم يتم تأكيد دفعه بعد! يرجى تأكيد الدفع عبر زر "تأكيد الاستلام" أولاً.'
@@ -573,9 +570,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       // ★ تحقق من قاعدة البيانات أن التغيير تم فعلاً
       const verified = await verifyOrderStatus(orderId)
 
-      // ★ إرسال إشعار للمشرفين الآخرين — استثناء المشرف الفعّال
-      const actorChatId4 = String(getEffectiveChatId(ctx))
-      await sendAdminNotification(order, 'order_completed', undefined, actorChatId4)
+      // ★ لا إشعار للمشرفين الآخرين — كل مشرف يتفاعل مع رسالته فقط
 
       // ★ حدث الكيبورد — كل أزرار الإجراءات تختفي، فقط التفاصيل
       await ctx.editMessageText(
