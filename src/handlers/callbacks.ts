@@ -177,7 +177,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       // ★ تحقق من الحالة الحالية أولاً
       const order = await db.order.findUnique({
         where: { id: orderId },
-        select: { orderNumber: true, paymentStatus: true, status: true },
+        select: { orderNumber: true, paymentStatus: true, status: true, paymentMethod: true },
       })
 
       if (!order) {
@@ -898,7 +898,8 @@ ${paymentInfo}
   // Catch-all for unmatched callback queries
   // ---------------------------------------------------------------------------
   bot.on('callback_query', async (ctx) => {
-    log('callback', `UNHANDLED callback_query data=${ctx.callbackQuery?.data}`)
+    const cbData = ctx.callbackQuery && 'data' in ctx.callbackQuery ? ctx.callbackQuery.data : undefined
+    log('callback', `UNHANDLED callback_query data=${cbData}`)
     try {
       await ctx.answerCbQuery('⚠️ هذا الزر غير متاح حالياً')
     } catch { /* ignore */ }

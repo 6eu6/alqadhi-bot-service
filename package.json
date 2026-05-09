@@ -10,13 +10,14 @@
     "postinstall": "npm run generate"
   },
   "dependencies": {
-    "@prisma/client": "6.19.2",
-    "prisma": "6.19.2",
+    "@prisma/client": "^6.19.3",
+    "prisma": "^6.19.3",
     "telegraf": "^4.16.3",
     "tsx": "^4.19.0"
   },
   "devDependencies": {
-    "@types/node": "^22.19.17"
+    "@types/node": "^22.19.17",
+    "typescript": "^6.0.3"
   },
   "engines": {
     "node": ">=20.0.0"
