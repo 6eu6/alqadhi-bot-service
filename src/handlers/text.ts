@@ -37,7 +37,7 @@ export function registerTextHandler(bot: Telegraf<any>) {
         const order = await db.order.findUnique({
           where: { id: conv.orderId },
           select: {
-            id: true, orderNumber: true,
+            id: true, orderNumber: true, status: true,
             user: { select: { name: true, email: true, country: true, phone: true } },
             total: true, currency: true,
             paymentMethod: true, paymentStatus: true,
@@ -48,6 +48,7 @@ export function registerTextHandler(bot: Telegraf<any>) {
         const orderSnapshot = {
           id: order.id,
           orderNumber: order.orderNumber,
+          status: order.status,
           user: { name: order.user.name, email: order.user.email, phone: order.user.phone, country: order.user.country },
           total: order.total,
           currency: order.currency,

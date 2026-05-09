@@ -38,6 +38,7 @@ export async function sendAdminNotification(
   order: {
     id?: string
     orderNumber: string
+    status?: string
     user: { name: string; email: string; phone?: string | null; country?: string | null }
     total: any
     totalUSD?: any
@@ -101,11 +102,11 @@ export async function sendAdminNotification(
 
     const message = lines.join('\n')
 
-    // Build inline keyboard for order action buttons
+    // ★ Build inline keyboard for order action buttons — with orderStatus for accurate buttons
     const extra: any = { parse_mode: 'HTML' }
     if (order.id) {
       extra.reply_markup = {
-        inline_keyboard: buildNotificationButtons(order.id, event, order.paymentMethod, order.paymentStatus),
+        inline_keyboard: buildNotificationButtons(order.id, event, order.paymentMethod, order.paymentStatus, order.status),
       }
     }
 

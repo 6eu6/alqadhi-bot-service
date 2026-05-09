@@ -6,7 +6,7 @@
  *   قبل وبعد استدعاء store API. هذا يضمن:
  *   1. لا تكرار إجراءات (idempotent)
  *   2. إذا فشل store API، المشرف يرى رسالة واضحة
- *   3. الأزرار تتحدث حسب الحالة الفعلية للطلب
+ *   3. الأزرار تتحدث حسب الحالة الفعلية للطلب — كل زر يختفي بعد تنفيذ إجراءه
  */
 
 import { Telegraf, Markup } from 'telegraf'
@@ -14,7 +14,7 @@ import { db } from '../database.js'
 import { isValidOrderId, sanitize, escapeCode, formatDate, formatAmount, getText, log } from '../helpers.js'
 import { ORDER_STATUS_AR, PAYMENT_STATUS_AR, getPaymentMethodLabel } from '../constants.js'
 import { getEffectiveChatId, sendKeyboard } from '../admin.js'
-import { orderActionKeyboard } from '../keyboards.js'
+import { orderActionKeyboard, orderActionKeyboardAfterAction } from '../keyboards.js'
 import { callStoreOrderApi } from '../store-api.js'
 import { setConversation, clearConversation } from '../conversations.js'
 import { sendAdminNotification } from '../notifications.js'
@@ -51,6 +51,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
 
   // ---------------------------------------------------------------------------
   // ✅ تأكيد الدفع (pay_approve)
+  // ★ بعد التأكيد: يختفي زر التأكيد والرفض → تظهر أزرار الشحن
   // ---------------------------------------------------------------------------
   bot.action(/^pay_approve_(.+)$/, async (ctx) => {
     try {
@@ -79,7 +80,10 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         const currentStatus = ORDER_STATUS_AR[order.status] || order.status
         return ctx.editMessageText(
           `ℹ️ <b>تم تأكيد هذا الطلب بالفعل</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ${currentStatus}\n💳 الدفع: ✅ مؤكد`,
-          { parse_mode: 'HTML' },
+          {
+            parse_mode: 'HTML',
+            ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+          },
         )
       }
 
@@ -89,11 +93,14 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       if (!result.success) {
         const errMsg = result.error || 'حدث خطأ داخلي'
         log('callback', `pay_approve FAILED: ${errMsg}`)
-        // ★ عدّل الرسالة بدل إرسال رد — المشرف يرى الخطأ بوضوح
         try {
           await ctx.editMessageText(
             `❌ <b>فشل تأكيد الدفع</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n⚠️ ${sanitize(errMsg)}\n\n💡 حاول مرة أخرى أو تحقق من السجلات`,
-            { parse_mode: 'HTML' },
+            {
+              parse_mode: 'HTML',
+              // ★ حتى عند الفشل، أظهر الأزرار الأصلية للمحاولة مرة أخرى
+              ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+            },
           )
         } catch {
           try { await ctx.replyWithHTML(`⚠️ خطأ في تأكيد الدفع\n\n${errMsg}`) } catch { /* ignore */ }
@@ -108,7 +115,10 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         try {
           await ctx.editMessageText(
             `⚠️ <b>تحذير: قد لا يكون التأكيد قد حُفظ</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 حالة الدفع في DB: ${verified?.paymentStatus || 'غير معروف'}\n\n💡 تحقق من السجلات أو حاول مرة أخرى`,
-            { parse_mode: 'HTML' },
+            {
+              parse_mode: 'HTML',
+              ...orderActionKeyboard(orderId, verified?.status || order.status, verified?.paymentStatus || order.paymentStatus, order.paymentMethod),
+            },
           )
         } catch { /* ignore */ }
         return
@@ -117,9 +127,13 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       // Send admin Telegram notification (customer notification handled by store API)
       await sendAdminNotification(order, 'payment_approved')
 
+      // ★ تحديث الرسالة مع كيبورد جديد — أزرار الشحن بدل أزرار التأكيد
       await ctx.editMessageText(
         `✅ <b>تم تأكيد استلام الدفع!</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ⚙️ قيد التنفيذ\n💳 الدفع: ✅ مؤكد\n👤 العميل: ${sanitize(order.user.name)}\n📧✅ تم إرسال إشعار للعميل`,
-        { parse_mode: 'HTML' },
+        {
+          parse_mode: 'HTML',
+          ...orderActionKeyboardAfterAction(orderId, 'pay_approve', verified.status, verified.paymentStatus, order.paymentMethod),
+        },
       )
       log('callback', `pay_approve SUCCESS orderId=${orderId} — verified paymentStatus=PAID in DB`)
     } catch (err: any) {
@@ -162,7 +176,21 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         const statusLabel = ORDER_STATUS_AR[order.status] || order.status
         return ctx.editMessageText(
           `ℹ️ <b>لا يمكن رفض طلب تم تأكيد دفعه</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ${statusLabel}\n💳 الدفع: ✅ مؤكد`,
-          { parse_mode: 'HTML' },
+          {
+            parse_mode: 'HTML',
+            ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+          },
+        )
+      }
+
+      // ★ إذا الطلب مرفوض/ملغي — لا يمكن رفضه مرة أخرى
+      if (order.status === 'REJECTED' || order.status === 'CANCELLED') {
+        return ctx.editMessageText(
+          `ℹ️ <b>هذا الطلب ${order.status === 'REJECTED' ? 'مرفوض' : 'ملغي'} بالفعل</b>`,
+          {
+            parse_mode: 'HTML',
+            ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+          },
         )
       }
 
@@ -209,10 +237,16 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       // جلب حالة الدفع الحالية للطلب قبل بدء المحادثة + تحقق إضافي
       const order = await db.order.findUnique({
         where: { id: orderId },
-        select: { paymentStatus: true, paymentMethod: true },
+        select: { paymentStatus: true, paymentMethod: true, status: true },
       })
       if (order?.paymentStatus === 'PAID') {
-        return ctx.editMessageText('⚠️ لا يمكن رفض طلب تم تأكيد دفعه بالفعل', { parse_mode: 'HTML' })
+        return ctx.editMessageText(
+          '⚠️ لا يمكن رفض طلب تم تأكيد دفعه بالفعل',
+          {
+            parse_mode: 'HTML',
+            ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+          },
+        )
       }
 
       const cid = String(chatId)
@@ -330,9 +364,10 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         `🗓 ${formatDate(order.createdAt)}`,
       ].filter(Boolean).join('\n')
 
+      // ★ استخدم orderActionKeyboard مع order.status
       return ctx.editMessageText(msg, {
         parse_mode: 'HTML',
-        ...orderActionKeyboard(order.id, order.paymentStatus, order.paymentMethod),
+        ...orderActionKeyboard(order.id, order.status, order.paymentStatus, order.paymentMethod),
       })
     } catch (err: any) {
       const msg = err?.message || 'Unknown'
@@ -345,6 +380,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
 
   // ---------------------------------------------------------------------------
   // 📦 جاري الشحن (ship_start)
+  // ★ بعد بدء الشحن: يختفي زر جاري الشحن → يبقى فقط زر تم الشحن
   // ---------------------------------------------------------------------------
   bot.action(/^ship_start_(.+)$/, async (ctx) => {
     try {
@@ -366,18 +402,36 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       if (order.status === 'COMPLETED') {
         return ctx.editMessageText(
           `ℹ️ <b>هذا الطلب مكتمل بالفعل</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ✅ مكتمل`,
-          { parse_mode: 'HTML' },
+          {
+            parse_mode: 'HTML',
+            ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+          },
         )
       }
 
-      // ★ تحقق: الطلب قيد التنفيذ فعلاً (بعد تأكيد الدفع) → هذا طبيعي، لا مشكلة
+      // ★ تحقق: الطلب مرفوض أو ملغي؟
+      if (order.status === 'REJECTED' || order.status === 'CANCELLED') {
+        const statusLabel = ORDER_STATUS_AR[order.status] || order.status
+        return ctx.editMessageText(
+          `ℹ️ <b>لا يمكن الشحن — الطلب ${statusLabel}</b>`,
+          {
+            parse_mode: 'HTML',
+            ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+          },
+        )
+      }
+
+      // ★ تحقق: الطلب قيد التنفيذ فعلاً (بعد تأكيد الدفع)
       if (order.status === 'PROCESSING') {
-        // الطلب فعلاً في حالة التنفيذ — هذا حدث بعد تأكيد الدفع
-        // لا حاجة لاستدعاء store API مرة أخرى
+        // الطلب فعلاً في حالة التنفيذ — أرسل إشعار للعميل
         await sendAdminNotification(order, 'order_processing')
+        // ★ حدث الكيبورد — أزل زر جاري الشحن، أبقِ زر تم الشحن
         return ctx.editMessageText(
           `📦 <b>الطلب قيد التنفيذ والشحن</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ⚙️ جاري التنفيذ\n💳 الدفع: ✅ مؤكد\n👤 العميل: ${sanitize(order.user.name)}\n📧✅ تم إرسال إشعار للعميل`,
-          { parse_mode: 'HTML' },
+          {
+            parse_mode: 'HTML',
+            ...orderActionKeyboardAfterAction(orderId, 'ship_start', order.status, order.paymentStatus, order.paymentMethod),
+          },
         )
       }
 
@@ -390,7 +444,10 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
           log('callback', `BLOCK ship_start: order ${orderId} uses online payment (${order.paymentMethod}) but is not PAID`)
           return ctx.editMessageText(
             `🚫 <b>لا يمكن الشحن — الدفع غير مؤكد</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n💳 طريقة الدفع: ${order.paymentMethod}\n📊 حالة الدفع: ${order.paymentStatus}\n\n⚠️ يجب تأكيد الدفع من بوابة الدفع الإلكترونية أولاً قبل الشحن.\nإذا تم الدفع بالفعل، تحقق من حالة الويب هوك أو اضغط "تأكيد الاستلام".`,
-            { parse_mode: 'HTML' },
+            {
+              parse_mode: 'HTML',
+              ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+            },
           )
         }
         log('callback', `WARN ship_start: order ${orderId} is unpaid. Allowing with warning.`)
@@ -402,11 +459,14 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       if (!result.success) {
         const errMsg = result.error || 'حدث خطأ داخلي'
         log('callback', `ship_start FAILED: ${errMsg}`)
-        // ★ عدّل الرسالة بدل إرسال رد
         try {
           await ctx.editMessageText(
             `❌ <b>فشل تحديث حالة الشحن</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n⚠️ ${sanitize(errMsg)}`,
-            { parse_mode: 'HTML' },
+            {
+              parse_mode: 'HTML',
+              // ★ حتى عند الفشل، أظهر الأزرار الأصلية للمحاولة مرة أخرى
+              ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+            },
           )
         } catch {
           try { await ctx.replyWithHTML(`⚠️ خطأ\n\n${errMsg}`) } catch { /* ignore */ }
@@ -424,9 +484,13 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         ? '\n\n⚠️ <b>تنبيه:</b> الطلب لم يتم تأكيد دفعه بعد! يرجى تأكيد الدفع عبر زر "تأكيد الاستلام" أولاً.'
         : ''
 
+      // ★ حدث الكيبورد — أزل زر جاري الشحن، أبقِ فقط زر تم الشحن
       await ctx.editMessageText(
         `📦 <b>تم تحديث: جاري الشحن</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ⚙️ جاري التنفيذ والشحن${verified ? ` (✅ موثق: ${PAYMENT_STATUS_AR[verified.paymentStatus] || verified.paymentStatus})` : ''}\n👤 العميل: ${sanitize(order.user.name)}\n📧✅ تم إرسال إشعار للعميل${unpaidWarning}`,
-        { parse_mode: 'HTML' },
+        {
+          parse_mode: 'HTML',
+          ...orderActionKeyboardAfterAction(orderId, 'ship_start', verified?.status || 'PROCESSING', verified?.paymentStatus || order.paymentStatus, order.paymentMethod),
+        },
       )
       log('callback', `ship_start SUCCESS orderId=${orderId} — verified status=${verified?.status} paymentStatus=${verified?.paymentStatus}`)
     } catch (err: any) {
@@ -443,6 +507,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
 
   // ---------------------------------------------------------------------------
   // 🎉 تم الشحن (ship_done)
+  // ★ بعد الإكمال: تختفي كل أزرار الإجراءات → يبقى فقط زر التفاصيل
   // ---------------------------------------------------------------------------
   bot.action(/^ship_done_(.+)$/, async (ctx) => {
     try {
@@ -464,7 +529,21 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       if (order.status === 'COMPLETED') {
         return ctx.editMessageText(
           `ℹ️ <b>هذا الطلب مكتمل بالفعل</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ✅ مكتمل ومشحون\n💳 الدفع: ✅ مؤكد`,
-          { parse_mode: 'HTML' },
+          {
+            parse_mode: 'HTML',
+            ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+          },
+        )
+      }
+
+      // ★ تحقق: الطلب مرفوض أو ملغي؟
+      if (order.status === 'REJECTED' || order.status === 'CANCELLED') {
+        return ctx.editMessageText(
+          `ℹ️ <b>لا يمكن إكمال طلب ${ORDER_STATUS_AR[order.status] || order.status}</b>`,
+          {
+            parse_mode: 'HTML',
+            ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+          },
         )
       }
 
@@ -474,11 +553,13 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       if (!result.success) {
         const errMsg = result.error || 'حدث خطأ داخلي'
         log('callback', `ship_done FAILED: ${errMsg}`)
-        // ★ عدّل الرسالة بدل إرسال رد
         try {
           await ctx.editMessageText(
             `❌ <b>فشل إكمال الطلب</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n⚠️ ${sanitize(errMsg)}`,
-            { parse_mode: 'HTML' },
+            {
+              parse_mode: 'HTML',
+              ...orderActionKeyboard(orderId, order.status, order.paymentStatus, order.paymentMethod),
+            },
           )
         } catch {
           try { await ctx.replyWithHTML(`⚠️ خطأ\n\n${errMsg}`) } catch { /* ignore */ }
@@ -492,9 +573,13 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       // Send admin Telegram notification (customer notification handled by store API)
       await sendAdminNotification(order, 'order_completed')
 
+      // ★ حدث الكيبورد — كل أزرار الإجراءات تختفي، فقط التفاصيل
       await ctx.editMessageText(
         `🎉 <b>تم الشحن بنجاح!</b>\n\n📋 <code>${escapeCode(order.orderNumber)}</code>\n📊 الحالة: ✅ مكتمل ومشحون${verified ? ` (✅ موثق)` : ''}\n💳 الدفع: ✅ مؤكد\n👤 العميل: ${sanitize(order.user.name)}\n📧✅ تم إرسال إشعار للعميل`,
-        { parse_mode: 'HTML' },
+        {
+          parse_mode: 'HTML',
+          ...orderActionKeyboardAfterAction(orderId, 'ship_done', verified?.status || 'COMPLETED', verified?.paymentStatus || 'PAID', order.paymentMethod),
+        },
       )
       log('callback', `ship_done SUCCESS orderId=${orderId} — verified status=${verified?.status} paymentStatus=${verified?.paymentStatus}`)
     } catch (err: any) {
@@ -575,7 +660,6 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
         paymentInfo = `💳 الدفع: ${gatewayLabel} — ${payStatusLabel}\n🔢 المعاملة: <code>${escapeCode(order.payment.transactionId)}</code>`
       } else {
-        // ★ Guarantee: إذا لا يوجد سجل دفع، اعرض طريقة الدفع من الطلب
         const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
         paymentInfo = `💳 الدفع: ${gatewayLabel} — ${payStatusLabel}`
       }
@@ -621,7 +705,7 @@ ${currencyLines.join('\n')}
 ${paymentInfo}
 
 ⏰ ${formatDate(order.createdAt)}
-      `.trim(), orderActionKeyboard(order.id, order.paymentStatus, order.paymentMethod))
+      `.trim(), orderActionKeyboard(order.id, order.status, order.paymentStatus, order.paymentMethod))
     } catch (err: any) {
       const msg = err?.message || 'Unknown'
       log('callback', `ERROR order_details: ${msg}`, err)

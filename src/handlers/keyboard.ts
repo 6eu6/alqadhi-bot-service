@@ -114,7 +114,8 @@ export function registerKeyboardHandlers(bot: Telegraf<any>) {
           `🗓 ${formatDate(order.createdAt)}`,
         ].filter(Boolean).join('\n')
 
-        await ctx.replyWithHTML(msg, orderActionKeyboard(order.id, order.paymentStatus, order.paymentMethod))
+        // ★ استخدم orderActionKeyboard مع order.status لعرض الأزرار الصحيحة حسب الحالة
+        await ctx.replyWithHTML(msg, orderActionKeyboard(order.id, order.status, order.paymentStatus, order.paymentMethod))
       }
     } catch (err: any) {
       const msg = err?.message || 'Unknown error'
