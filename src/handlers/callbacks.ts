@@ -443,7 +443,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       if (order.localPayment) {
         const methodName = getText(order.localPayment.method?.name, order.paymentMethod || 'محلي')
         paymentInfo = `💳 الدفع: ${methodName} — ${payStatusLabel}`
-        if (order.localPayment.receiptUrl) paymentInfo += `\n🖼 الإيصال: ${order.localPayment.receiptUrl}`
+        if (order.localPayment.receiptUrl) paymentInfo += `\n🖼 الإيصال: <a href="${order.localPayment.receiptUrl}">عرض الصورة</a>`
         if (order.localPayment.reviewNotes) paymentInfo += `\n📝 ملاحظات: ${sanitize(order.localPayment.reviewNotes)}`
         if (order.localPayment.fieldValues && typeof order.localPayment.fieldValues === 'object') {
           const fvMeta = (order.localPayment.fieldValues as any)._meta as Record<string, any> | undefined

@@ -20,6 +20,16 @@ export function initNotifications(botInstance: Telegraf<any>) {
 }
 
 /**
+ * Get the list of target chat IDs for notifications.
+ * Returns all active admins, or falls back to the super admin from env.
+ */
+function getTargetChatIds(): string[] {
+  return adminCache.size > 0
+    ? Array.from(adminCache)
+    : [String(SUPER_ADMIN_CHAT_ID)]
+}
+
+/**
  * Send an inline Telegram notification to the admin chat about an order event.
  * Uses bot.telegram.sendMessage() directly.
  * Used for admin-initiated action confirmations (approve, reject, ship, complete).
@@ -86,9 +96,7 @@ export async function sendAdminNotification(
     }
 
     // إرسال لجميع المشرفين النشطين
-    const targetChatIds = adminCache.size > 0
-      ? Array.from(adminCache)
-      : [String(SUPER_ADMIN_CHAT_ID)]
+    const targetChatIds = getTargetChatIds()
 
     for (const chatId of targetChatIds) {
       try {
@@ -108,7 +116,7 @@ export async function sendAdminNotification(
  *
  * Two event types:
  *   - `payment_confirmed`: Stripe/gateway auto-confirmed → show ship/done buttons
- *   - `receipt_uploaded`: Customer uploaded receipt → show approve/reject buttons
+ *   - `receipt_uploaded`: Customer uploaded receipt → show approve/reject buttons + receipt link
  *
  * This function fetches the order from DB with full details (items, payment, etc.)
  * and sends a rich notification to every active admin.
@@ -175,6 +183,7 @@ export async function sendWebhookOrderNotification(
     if (event === 'receipt_uploaded' && order.localPayment) {
       const methodName = getText(order.localPayment.method?.name, order.paymentMethod || 'محلي')
       paymentInfo = `💳 الدفع: ${methodName} — ⏳ بانتظار المراجعة`
+      // ★ عرض رابط صورة الإيصال كرابط قابل للضغط
       if (order.localPayment.receiptUrl) {
         paymentInfo += `\n🖼 الإيصال: <a href="${order.localPayment.receiptUrl}">عرض الصورة</a>`
       }
@@ -230,9 +239,7 @@ export async function sendWebhookOrderNotification(
     }
 
     // Send to ALL active admins
-    const targetChatIds = adminCache.size > 0
-      ? Array.from(adminCache)
-      : [String(SUPER_ADMIN_CHAT_ID)]
+    const targetChatIds = getTargetChatIds()
 
     let sentCount = 0
     for (const chatId of targetChatIds) {
