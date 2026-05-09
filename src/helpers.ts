@@ -4,6 +4,7 @@
  */
 
 import { db } from './database.js'
+import { timingSafeEqual } from 'node:crypto'
 
 /**
  * Validate that a string looks like a Prisma CUID (used for Order IDs).
@@ -19,12 +20,16 @@ export function isValidOrderId(id: string): boolean {
 
 /** Timing-safe string comparison to prevent timing attacks */
 export function safeCompare(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let result = 0
-  for (let i = 0; i < a.length; i++) {
-    result |= a.charCodeAt(i) ^ b.charCodeAt(i)
+  // ★ SECURITY: Use Node.js crypto.timingSafeEqual for constant-time comparison
+  // Prevents attackers from determining secret length or content via timing analysis
+  const bufA = Buffer.from(a, 'utf8')
+  const bufB = Buffer.from(b, 'utf8')
+  if (bufA.length !== bufB.length) {
+    // Burn constant CPU cycles even on length mismatch to prevent length leakage
+    timingSafeEqual(bufA, bufA)
+    return false
   }
-  return result === 0
+  return timingSafeEqual(bufA, bufB)
 }
 
 /** Sanitize text to prevent HTML injection in Telegram messages */

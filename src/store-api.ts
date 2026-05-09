@@ -14,7 +14,7 @@ import { log } from './helpers.js'
 export async function callStoreOrderApi(
   orderId: string,
   action: 'approve' | 'reject' | 'process' | 'complete',
-  extra?: { reason?: string },
+  extra?: { reason?: string; actorId?: string },
 ): Promise<{ success: boolean; data?: any; error?: string }> {
   if (!INTERNAL_SECRET) {
     log('api', 'ERROR No INTERNAL_API_SECRET configured — cannot call store API')
@@ -24,6 +24,7 @@ export async function callStoreOrderApi(
   try {
     const body: Record<string, string> = { action }
     if (extra?.reason) body.reason = extra.reason
+    if (extra?.actorId) body.actorId = extra.actorId
 
     const response = await fetch(`${API_BASE_URL}/api/internal/order/${orderId}`, {
       method: 'POST',

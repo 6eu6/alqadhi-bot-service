@@ -60,7 +60,7 @@ export function registerTextHandler(bot: Telegraf<any>) {
         // Delegate to store's centralized API (handles: order + payments + coupon cleanup + notification)
         // ★ حد الطول + إزالة أحرف التحكم — منع حقن في إشعارات البريد
         const cleanReason = text.slice(0, 500).replace(/[\x00-\x1f]/g, '')
-        const result = await callStoreOrderApi(conv.orderId!, 'reject', { reason: cleanReason })
+        const result = await callStoreOrderApi(conv.orderId!, 'reject', { reason: cleanReason, actorId: cid })
 
         if (!result.success) {
           const errMsg = result.error || 'حدث خطأ داخلي'

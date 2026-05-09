@@ -91,7 +91,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       }
 
       // Delegate to store's centralized API (atomic: order + payment + stock + notification)
-      const result = await callStoreOrderApi(orderId, 'approve')
+      const result = await callStoreOrderApi(orderId, 'approve', { actorId: String(ctx.from?.id || 'unknown') })
 
       if (!result.success) {
         const errMsg = result.error || 'حدث خطأ داخلي'
@@ -469,7 +469,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       }
 
       // Delegate to store's centralized API
-      const result = await callStoreOrderApi(orderId, 'process')
+      const result = await callStoreOrderApi(orderId, 'process', { actorId: String(ctx.from?.id || 'unknown') })
 
       if (!result.success) {
         const errMsg = result.error || 'حدث خطأ داخلي'
@@ -571,7 +571,7 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
       }
 
       // Delegate to store's centralized API (handles: order update + idempotent stock decrement)
-      const result = await callStoreOrderApi(orderId, 'complete')
+      const result = await callStoreOrderApi(orderId, 'complete', { actorId: String(ctx.from?.id || 'unknown') })
 
       if (!result.success) {
         const errMsg = result.error || 'حدث خطأ داخلي'
