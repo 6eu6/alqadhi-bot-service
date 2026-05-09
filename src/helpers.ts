@@ -41,6 +41,19 @@ export function escapeCode(text: string): string {
   return sanitize(text)
 }
 
+/**
+ * ★ SECURITY: تطهير URL للاستخدام في href — يمنع حقن HTML و javascript: وبروتوكولات خطرة
+ * السماح فقط بـ http:// و https:// — رفض أي بروتوكول آخر
+ */
+export function sanitizeUrl(url: string | null | undefined): string {
+  if (!url) return ''
+  const trimmed = url.trim()
+  // السماح فقط بـ http/https — يمنع javascript: و data: وبروتوكولات خطرة
+  if (!/^https?:\/\//i.test(trimmed)) return ''
+  // تطهير أحرف HTML الخاصة — يمنع كسر سمة href
+  return sanitize(trimmed)
+}
+
 /** Format a date in Arabic locale */
 export function formatDate(date: Date): string {
   return new Intl.DateTimeFormat('ar-SA', {

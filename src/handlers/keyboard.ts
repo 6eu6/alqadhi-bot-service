@@ -5,7 +5,7 @@
 
 import { Telegraf } from 'telegraf'
 import { db } from '../database.js'
-import { sanitize, escapeCode, formatDate, formatAmount, getText, log, getStoreName } from '../helpers.js'
+import { sanitize, escapeCode, sanitizeUrl, formatDate, formatAmount, getText, log, getStoreName } from '../helpers.js'
 import { ORDER_STATUS_AR, PAYMENT_STATUS_AR, KB, getPaymentMethodLabel } from '../constants.js'
 import { SUPER_ADMIN_CHAT_ID, SERVICE_PORT, WEBHOOK_SECRET } from '../config.js'
 import { isSuperAdmin, adminCache, sendKeyboard } from '../admin.js'
@@ -67,7 +67,10 @@ export function registerKeyboardHandlers(bot: Telegraf<any>) {
         if (order.localPayment) {
           const methodName = getText(order.localPayment.method?.name, order.paymentMethod || 'محلي')
           paymentInfo = `💳 الدفع: ${methodName} — ${payStatusLabel}`
-          if (order.localPayment.receiptUrl) paymentInfo += `\n🖼 الإيصال: <a href="${order.localPayment.receiptUrl}">عرض الصورة</a>`
+          if (order.localPayment.receiptUrl) {
+            const safeUrl = sanitizeUrl(order.localPayment.receiptUrl)
+            if (safeUrl) paymentInfo += `\n🖼 الإيصال: <a href="${safeUrl}">عرض الصورة</a>`
+          }
           if (order.localPayment.fieldValues && typeof order.localPayment.fieldValues === 'object') {
             const fvMeta = (order.localPayment.fieldValues as any)._meta as Record<string, any> | undefined
             const fvLabels = fvMeta?.fieldLabels as Record<string, string> | undefined

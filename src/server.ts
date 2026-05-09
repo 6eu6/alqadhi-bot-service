@@ -36,10 +36,19 @@ async function checkTelegramConnection(bot: Telegraf<any>): Promise<{ ok: boolea
  * Read the full request body as a string.
  * Helper for webhook endpoint (raw body parsing).
  */
-function readRequestBody(req: IncomingMessage): Promise<string> {
+function readRequestBody(req: IncomingMessage, maxSize = 1_048_576): Promise<string> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
-    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    let size = 0
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length
+      if (size > maxSize) {
+        req.destroy()
+        reject(new Error('Body too large'))
+        return
+      }
+      chunks.push(chunk)
+    })
     req.on('end', () => resolve(Buffer.concat(chunks).toString('utf-8')))
     req.on('error', reject)
   })
@@ -61,19 +70,10 @@ export function createHttpServer(bot: Telegraf<any>) {
     // ─── Health Check ────────────────────────────────────────────────────────
     if (pathname === '/health' && method === 'GET') {
       const telegram = await checkTelegramConnection(bot)
+      // ★ SECURITY: معلومات أساسية فقط — بدون كشف تفاصيل داخلية
       return sendJson(res, 200, {
         status: telegram.ok ? 'ok' : 'degraded',
-        service: 'alqadhi-bot-service',
-        telegram: {
-          connected: telegram.ok,
-          botUsername: telegram.botUsername,
-        },
-        admins: adminCache.size,
-        superAdmins: superAdminCache.size,
-        conversations: conversations.size,
-        webhookEnabled: !!WEBHOOK_SECRET,
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
       })
     }
 

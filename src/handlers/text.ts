@@ -57,7 +57,9 @@ export function registerTextHandler(bot: Telegraf<any>) {
         }
 
         // Delegate to store's centralized API (handles: order + payments + coupon cleanup + notification)
-        const result = await callStoreOrderApi(conv.orderId!, 'reject', { reason: text })
+        // ★ حد الطول + إزالة أحرف التحكم — منع حقن في إشعارات البريد
+        const cleanReason = text.slice(0, 500).replace(/[\x00-\x1f]/g, '')
+        const result = await callStoreOrderApi(conv.orderId!, 'reject', { reason: cleanReason })
 
         if (!result.success) {
           const errMsg = result.error || 'حدث خطأ داخلي'
@@ -79,10 +81,17 @@ export function registerTextHandler(bot: Telegraf<any>) {
     }
 
     // ---------------------------------------------------------------
-    // إضافة مشرف (add_admin)
+    // إضافة مشرف (add_admin) — ★ يطلب صلاحية مالك
     // ---------------------------------------------------------------
     if (conv.type === 'add_admin') {
-      const parts = text.trim().split(/\s+/)
+      // ★ DEFENSE IN DEPTH: إعادة التحقق من صلاحية المالك
+      // حتى لو keyboard.ts هو من بدأ المحادثة، نتأكد هنا أيضاً
+      if (!await isSuperAdmin(chatId)) {
+        log('security', `BLOCK add_admin: non-super admin ${cid} tried to add admin`)
+        return sendKeyboard(ctx, '⛔ غير مصرح — هذا الإجراء للمالك فقط 👑')
+      }
+
+      const parts = text.trim().slice(0, 500).split(/\s+/)
       if (parts.length < 1) return sendKeyboard(ctx, '⚠️ أرسل Chat ID على الأقل')
 
       const target = parts[0].trim()
@@ -122,10 +131,16 @@ export function registerTextHandler(bot: Telegraf<any>) {
     }
 
     // ---------------------------------------------------------------
-    // حذف مشرف (remove_admin)
+    // حذف مشرف (remove_admin) — ★ يطلب صلاحية مالك
     // ---------------------------------------------------------------
     if (conv.type === 'remove_admin') {
-      const target = text.trim()
+      // ★ DEFENSE IN DEPTH: إعادة التحقق من صلاحية المالك
+      if (!await isSuperAdmin(chatId)) {
+        log('security', `BLOCK remove_admin: non-super admin ${cid} tried to remove admin`)
+        return sendKeyboard(ctx, '⛔ غير مصرح — هذا الإجراء للمالك فقط 👑')
+      }
+
+      const target = text.trim().slice(0, 500)
       if (!/^\d+$/.test(target)) return sendKeyboard(ctx, '⚠️ Chat ID يجب أن يكون أرقام فقط')
       if (target === String(SUPER_ADMIN_CHAT_ID)) return sendKeyboard(ctx, '⚠️ لا يمكنك حذف المالك الأساسي')
       if (target === cid) return sendKeyboard(ctx, '⚠️ لا يمكنك حذف نفسك')
@@ -148,10 +163,16 @@ export function registerTextHandler(bot: Telegraf<any>) {
     }
 
     // ---------------------------------------------------------------
-    // ترقية مشرف (promote)
+    // ترقية مشرف (promote) — ★ يطلب صلاحية مالك
     // ---------------------------------------------------------------
     if (conv.type === 'promote') {
-      const target = text.trim()
+      // ★ DEFENSE IN DEPTH: إعادة التحقق من صلاحية المالك
+      if (!await isSuperAdmin(chatId)) {
+        log('security', `BLOCK promote: non-super admin ${cid} tried to promote`)
+        return sendKeyboard(ctx, '⛔ غير مصرح — هذا الإجراء للمالك فقط 👑')
+      }
+
+      const target = text.trim().slice(0, 500)
       if (target === cid) return sendKeyboard(ctx, '⚠️ أنت بالفعل مالك')
       if (!/^\d+$/.test(target)) return sendKeyboard(ctx, '⚠️ Chat ID يجب أن يكون أرقام فقط')
 
@@ -177,10 +198,16 @@ export function registerTextHandler(bot: Telegraf<any>) {
     }
 
     // ---------------------------------------------------------------
-    // تخفيض مشرف (demote)
+    // تخفيض مشرف (demote) — ★ يطلب صلاحية مالك
     // ---------------------------------------------------------------
     if (conv.type === 'demote') {
-      const target = text.trim()
+      // ★ DEFENSE IN DEPTH: إعادة التحقق من صلاحية المالك
+      if (!await isSuperAdmin(chatId)) {
+        log('security', `BLOCK demote: non-super admin ${cid} tried to demote`)
+        return sendKeyboard(ctx, '⛔ غير مصرح — هذا الإجراء للمالك فقط 👑')
+      }
+
+      const target = text.trim().slice(0, 500)
       if (target === cid) return sendKeyboard(ctx, '⚠️ لا يمكنك تخفيض نفسك')
       if (target === String(SUPER_ADMIN_CHAT_ID)) return sendKeyboard(ctx, '⚠️ لا يمكنك تخفيض المالك الأساسي')
       if (!/^\d+$/.test(target)) return sendKeyboard(ctx, '⚠️ Chat ID يجب أن يكون أرقام فقط')

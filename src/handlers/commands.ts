@@ -10,11 +10,16 @@ import { sendWebhookOrderNotification } from '../notifications.js'
 
 export function registerCommandHandlers(bot: Telegraf<any>) {
 
-  // ─── /testnotify — إرسال إشعار تجريبي لكل المشرفين ──────────────────
-  // ★ يرسل لكل المشرفين النشطين (مواضع متعددة) — يختبر نظام الإشعارات بالكامل
+  // ─── /testnotify — إرسال إشعار تجريبي لكل المشرفين (مالك فقط) ────────
+  // ★ SECURITY: مقيّد بالمالك فقط — يمنع المشرفين العاديين من إزعاج الآخرين
   bot.command('testnotify', async (ctx) => {
     const chatId = ctx.chat?.id
     if (!chatId) return
+
+    // ★ SECURITY: تحقق من صلاحية المالك
+    if (!await isSuperAdmin(chatId)) {
+      return ctx.reply('⛔ هذا الأمر متاح للمالك فقط 👑')
+    }
 
     try {
       // ★ حدّث الكاش أول — يضمن أن المشرفين الجدد يشملون
@@ -35,14 +40,14 @@ export function registerCommandHandlers(bot: Telegraf<any>) {
         try {
           await bot.telegram.sendMessage(
             targetId,
-            `🔔 <b>إشعار تجريبي — النظام يعمل!</b>\n\n✅ تم إرسال هذا الإشعار بنجاح\n📡 البوت متصل ويعمل\n🔢 Chat ID: <code>${targetId}</code>\n👥 إجمالي المشرفين: ${targetChatIds.length}\n⏰ ${new Date().toISOString()}\n\n💡 إذا وصلك هذا الإشعار، فنظام الإشعارات يعمل بشكل صحيح.`,
+            `🔔 <b>إشعار تجريبي — النظام يعمل!</b>\n\n✅ تم إرسال هذا الإشعار بنجاح\n👥 إجمالي المشرفين: ${targetChatIds.length}\n⏰ ${new Date().toISOString()}\n\n💡 إذا وصلك هذا الإشعار، فنظام الإشعارات يعمل بشكل صحيح.`,
             { parse_mode: 'HTML' }
           )
           sentCount++
           results.push(`✅ ${targetId}`)
         } catch (err: any) {
           failCount++
-          results.push(`❌ ${targetId} — ${err?.message || 'خطأ'}`)
+          results.push(`❌ ${targetId} — فشل الإرسال`)
           log('testnotify', `FAILED to send to ${targetId}:`, err?.message)
         }
       }
@@ -53,8 +58,8 @@ export function registerCommandHandlers(bot: Telegraf<any>) {
 
       log('testnotify', `Test notification: ${sentCount}/${targetChatIds} sent successfully`)
     } catch (err: any) {
-      log('testnotify', `ERROR: ${err?.message}`, err)
-      await ctx.reply(`❌ فشل إرسال الإشعار التجريبي: ${err?.message || 'خطأ غير معروف'}`)
+      log('testnotify', `ERROR: ${err?.message}`)
+      await ctx.reply('❌ فشل إرسال الإشعار التجريبي — تحقق من السجلات')
     }
   })
 

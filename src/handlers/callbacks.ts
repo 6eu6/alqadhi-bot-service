@@ -11,7 +11,7 @@
 
 import { Telegraf, Markup } from 'telegraf'
 import { db } from '../database.js'
-import { isValidOrderId, sanitize, escapeCode, formatDate, formatAmount, getText, log } from '../helpers.js'
+import { isValidOrderId, sanitize, escapeCode, sanitizeUrl, formatDate, formatAmount, getText, log } from '../helpers.js'
 import { ORDER_STATUS_AR, PAYMENT_STATUS_AR, getPaymentMethodLabel } from '../constants.js'
 import { getEffectiveChatId, sendKeyboard } from '../admin.js'
 import { orderActionKeyboard, orderActionKeyboardAfterAction } from '../keyboards.js'
@@ -333,7 +333,10 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
         const displayMethod = localMethodName !== '—' ? localMethodName : gatewayLabel
         paymentInfo = `💳 الدفع: ${displayMethod} — ${payStatusLabel}`
-        if (order.localPayment.receiptUrl) paymentInfo += `\n🖼 الإيصال: <a href="${order.localPayment.receiptUrl}">عرض الصورة</a>`
+        if (order.localPayment.receiptUrl) {
+          const safeUrl = sanitizeUrl(order.localPayment.receiptUrl)
+          if (safeUrl) paymentInfo += `\n🖼 الإيصال: <a href="${safeUrl}">عرض الصورة</a>`
+        }
         if (order.localPayment.fieldValues && typeof order.localPayment.fieldValues === 'object') {
           const fvMeta = (order.localPayment.fieldValues as any)._meta as Record<string, any> | undefined
           const fvLabels = fvMeta?.fieldLabels as Record<string, string> | undefined
@@ -644,7 +647,10 @@ export function registerCallbackHandlers(bot: Telegraf<any>) {
         const gatewayLabel = getPaymentMethodLabel(order.paymentMethod)
         const displayMethod = localMethodName !== '—' ? localMethodName : gatewayLabel
         paymentInfo = `💳 الدفع: ${displayMethod} — ${payStatusLabel}`
-        if (order.localPayment.receiptUrl) paymentInfo += `\n🖼 الإيصال: <a href="${order.localPayment.receiptUrl}">عرض الصورة</a>`
+        if (order.localPayment.receiptUrl) {
+          const safeUrl = sanitizeUrl(order.localPayment.receiptUrl)
+          if (safeUrl) paymentInfo += `\n🖼 الإيصال: <a href="${safeUrl}">عرض الصورة</a>`
+        }
         if (order.localPayment.reviewNotes) paymentInfo += `\n📝 ملاحظات: ${sanitize(order.localPayment.reviewNotes)}`
         if (order.localPayment.fieldValues && typeof order.localPayment.fieldValues === 'object') {
           const fvMeta = (order.localPayment.fieldValues as any)._meta as Record<string, any> | undefined
