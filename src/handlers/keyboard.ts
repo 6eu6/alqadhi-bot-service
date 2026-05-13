@@ -103,7 +103,7 @@ export function registerKeyboardHandlers(bot: Telegraf<any>) {
           ``,
           `👤 ${sanitize(order.user.name)}`,
           `📧 ${sanitize(order.user.email)}`,
-          order.user.phone ? `📱 ${sanitize(order.user.phone)}` : '',
+          order.user.phone ? `📱 ${sanitize(order.user.phone)}` : '📱 لايوجد رقم هاتف مُدخل',
           ``,
           `─────────────`,
           `🛍 <b>الخدمات:</b>`,

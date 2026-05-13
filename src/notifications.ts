@@ -80,6 +80,8 @@ export async function sendAdminNotification(
 
     if (order.user.phone) {
       lines.push(`📱 الهاتف: ${sanitize(order.user.phone)}`)
+    } else {
+      lines.push(`📱 الهاتف: لايوجد رقم هاتف مُدخل`)
     }
 
     lines.push('')
@@ -251,6 +253,8 @@ export async function sendWebhookOrderNotification(
 
     if (order.user.phone) {
       lines.push(`📱 الهاتف: ${sanitize(order.user.phone)}`)
+    } else {
+      lines.push(`📱 الهاتف: لايوجد رقم هاتف مُدخل`)
     }
 
     lines.push('')
