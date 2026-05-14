@@ -19,8 +19,6 @@ import { orderActionKeyboard, orderActionKeyboardAfterAction } from '../keyboard
 import { callStoreOrderApi } from '../store-api.js'
 import { setConversation, clearConversation } from '../conversations.js'
 import { auditLog } from '../audit.js'
-// ★ sendAdminNotification تم إزالته — إجراءات المشرف لا توصل إشعارات لبقية المشرفين
-// كل مشرف يتفاعل مع رسالته فقط، بدون إشعارات متقاطعة
 
 /**
  * ★ Helper: جلب الحالة الحالية للطلب من قاعدة البيانات بعد إجراء

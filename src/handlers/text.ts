@@ -11,7 +11,6 @@ import { isSuperAdmin, refreshAdminCache, sendKeyboard } from '../admin.js'
 import { callStoreOrderApi } from '../store-api.js'
 import { conversations, clearConversation, setConversation } from '../conversations.js'
 import { auditLog } from '../audit.js'
-// ★ sendAdminNotification تم إزالته — إجراءات المشرف لا توصل إشعارات لبقية المشرفين
 
 export function registerTextHandler(bot: Telegraf<any>) {
   bot.on('text', async (ctx, next) => {

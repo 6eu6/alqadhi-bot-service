@@ -6,9 +6,9 @@
 import { Telegraf } from 'telegraf'
 import { db } from './database.js'
 import { sanitize, escapeCode, formatDate, formatAmount, getText, log, getStoreName } from './helpers.js'
-import { EVENT_META, WEBHOOK_EVENT_META, OrderEvent, WebhookEvent, getPaymentMethodLabel } from './constants.js'
+import { WEBHOOK_EVENT_META, WebhookEvent, getPaymentMethodLabel } from './constants.js'
 import { adminCache, superAdminCache, refreshAdminCache, isCacheStale } from './admin.js'
-import { buildNotificationButtons, buildWebhookNotificationButtons } from './keyboards.js'
+import { buildWebhookNotificationButtons } from './keyboards.js'
 import { SUPER_ADMIN_CHAT_ID } from './config.js'
 
 /** Bot instance — set at startup via initNotifications() */
@@ -32,113 +32,6 @@ async function getTargetChatIds(): Promise<string[]> {
   return adminCache.size > 0
     ? Array.from(adminCache)
     : [String(SUPER_ADMIN_CHAT_ID)]
-}
-
-/**
- * Send an inline Telegram notification to the admin chat about an order event.
- * Uses bot.telegram.sendMessage() directly.
- * Used for admin-initiated action confirmations (approve, reject, ship, complete).
- */
-export async function sendAdminNotification(
-  order: {
-    id?: string
-    orderNumber: string
-    status?: string
-    user: { name: string; email: string; phone?: string | null; country?: string | null }
-    total: any
-    totalUSD?: any
-    currency: string
-    exchangeRate?: any
-    paymentMethod?: string | null
-    paymentStatus?: string | null
-  },
-  event: OrderEvent,
-  extraNotes?: string,
-  excludeChatId?: string,
-): Promise<void> {
-  if (!bot) {
-    log('notify', 'ERROR Bot instance not initialized — call initNotifications() first')
-    return
-  }
-
-  try {
-    const meta = EVENT_META[event]
-    if (!meta) return
-
-    const paymentMethod = order.paymentMethod ? getPaymentMethodLabel(order.paymentMethod) : '💳 غير محدد'
-
-    // Fetch store name from settings for dynamic branding
-    const storeName = await getStoreName()
-
-    const lines: string[] = [
-      `${meta.emoji} ${meta.label} — ${sanitize(storeName)}`,
-      ``,
-      `📋 الطلب: <code>${escapeCode(order.orderNumber)}</code>`,
-      `👤 العميل: ${sanitize(order.user.name)}`,
-      `📧 البريد: ${sanitize(order.user.email)}`,
-    ]
-
-    if (order.user.phone) {
-      lines.push(`📱 الهاتف: ${sanitize(order.user.phone)}`)
-    } else {
-      lines.push(`📱 الهاتف: لايوجد رقم هاتف مُدخل`)
-    }
-
-    lines.push('')
-    lines.push(`─────────────`)
-    // ★ Guarantee: المبلغ + العملة + سعر الصرف دائماً ظاهرة
-    const currency = order.currency || 'USD'
-    if (currency !== 'USD') {
-      lines.push(`💰 المبلغ: <b>${formatAmount(Number(order.total), currency)}</b>`)
-      // ★ Guarantee: حتى لو totalUSD = 0، اعرضه
-      lines.push(`💵 بالدولار: ${formatAmount(Number(order.totalUSD || 0), 'USD')}`)
-    } else {
-      lines.push(`💰 المبلغ: <b>${formatAmount(Number(order.total), 'USD')}</b>`)
-    }
-    if (order.exchangeRate && Number(order.exchangeRate) > 0) {
-      lines.push(`💱 سعر الصرف: ${Number(order.exchangeRate).toFixed(4)}`)
-    }
-    // ★ Guarantee: طريقة الدفع دائماً ظاهرة بالاسم الدقيق
-    lines.push(`💳 الدفع: ${sanitize(paymentMethod)}`)
-
-    if (extraNotes && extraNotes.trim().length > 0) {
-      lines.push(`📝 ملاحظات: ${sanitize(extraNotes.trim())}`)
-    }
-
-    lines.push('')
-    lines.push(`⏰ ${formatDate(new Date())}`)
-
-    const message = lines.join('\n')
-
-    // ★ Build inline keyboard for order action buttons — with orderStatus for accurate buttons
-    const extra: any = { parse_mode: 'HTML' }
-    if (order.id) {
-      extra.reply_markup = {
-        inline_keyboard: buildNotificationButtons(order.id, event, order.paymentMethod, order.paymentStatus, order.status),
-      }
-    }
-
-    // ★ إرسال لجميع المشرفين النشطين — باستثناء المشرف الذي أجرى الإجراء
-    // المشرف الفعّال يشوف نتيجة إجرائه عبر ctx.editMessageText() مباشرة
-    // فما يحتاج يشوف رسالة إشعار ثانية لنفس الحدث
-    const targetChatIds = (await getTargetChatIds()).filter(id => id !== excludeChatId)
-
-    let sentCount = 0
-    for (const chatId of targetChatIds) {
-      try {
-        await bot.telegram.sendMessage(chatId, message, extra)
-        sentCount++
-      } catch (err) {
-        log('notify', `ERROR Failed to send notification to ${chatId}:`, err)
-      }
-    }
-
-    if (targetChatIds.length > 0) {
-      log('notify', `Sent ${event} for order ${order.orderNumber} to ${sentCount}/${targetChatIds.length} admins (excluded: ${excludeChatId || 'none'})`)
-    }
-  } catch (err) {
-    log('notify', 'ERROR Failed to build admin notification:', err)
-  }
 }
 
 /**
@@ -294,18 +187,15 @@ export async function sendWebhookOrderNotification(
       },
     }
 
-    // Send to ALL active admins
+    // Send to ALL active admins — ★ موازي عبر Promise.allSettled
     const targetChatIds = await getTargetChatIds()
 
-    let sentCount = 0
-    for (const chatId of targetChatIds) {
-      try {
-        await bot.telegram.sendMessage(chatId, message, extra)
-        sentCount++
-      } catch (err) {
-        log('webhook-notify', `ERROR Failed to send to ${chatId}:`, err)
-      }
-    }
+    const results = await Promise.allSettled(
+      targetChatIds.map(chatId =>
+        bot!.telegram.sendMessage(chatId, message, extra)
+      )
+    )
+    const sentCount = results.filter(r => r.status === 'fulfilled').length
 
     log('webhook-notify', `Sent ${event} notification for order ${order.orderNumber} to ${sentCount}/${targetChatIds.length} admins`)
   } catch (err) {
